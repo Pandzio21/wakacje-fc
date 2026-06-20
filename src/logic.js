@@ -14,6 +14,7 @@ export const PLAYERS = [
   { id:"hux",     name:"Hux",     position:"ŚP/BR", value:120_000_000 },
   { id:"tymko",   name:"Tymko",   position:"BR/ŚO", value:800_000 },
   { id:"kalinek", name:"Kalinek", position:"PS/LS", value:18_000_000 },
+  { id:"piotrulla", name:"Piotrulla", position:"ŚO", value:4_000_000 },
 ];
 
 // Zawodnicy spoza klasy — oceniani w meczach, ale POZA rankingiem i statystykami sezonu
@@ -77,8 +78,9 @@ export const GOAL_TYPES = [
   { id:"freekick", label:"🌀 Wolny" },
   { id:"penalty",  label:"🫵 Karny" },
   { id:"noAssist", label:"🔵 Bez asysty" },
+  { id:"ownGoal",  label:"😬 Samobój" },
 ];
-export const GICO = { screamer:"🚀", header:"🦁", freekick:"🌀", penalty:"🫵", normal:"⚽", noAssist:"⚽" };
+export const GICO = { screamer:"🚀", header:"🦁", freekick:"🌀", penalty:"🫵", normal:"⚽", noAssist:"⚽", ownGoal:"😬" };
 export const RESULT_COLOR = { Wygrana:"#22c55e", Remis:"#f59e0b", Przegrana:"#ef4444" };
 export const RESULT_ICON  = { Wygrana:"W", Remis:"R", Przegrana:"P" };
 export const CAT_LABELS = { pos:"⚽ Pozytywne – pole", gk_pos:"🧤 Pozytywne – bramkarz", neg:"🔴 Negatywne – pole", gk_neg:"🔴 Negatywne – bramkarz" };
@@ -100,6 +102,25 @@ export function goalLabel(g) {
   const m = g.minute ? String(g.minute) : "";
   const s = g.stoppage ? ("+" + g.stoppage) : "";
   return m ? (m + s + "'") : (goalPhase(g) === "ET" ? "dogr." : "—");
+}
+
+// Wlicza wpływ gola na kryteria zawodnika o danym id (gol/asysta/typ/samobój)
+export function applyGoalToCriteria(crit, g, id) {
+  if (g.scorer === id) {
+    if (g.type === "ownGoal") {
+      crit.own_goal = (parseInt(crit.own_goal || 0) + 1);
+    } else if (g.type === "screamer") {
+      crit.screamer = (parseInt(crit.screamer || 0) + 1);
+    } else if (g.type === "freekick") {
+      crit.freekick = (parseInt(crit.freekick || 0) + 1);
+    } else if (g.type === "header") {
+      crit.header = (parseInt(crit.header || 0) + 1);
+    } else {
+      crit.goal = (parseInt(crit.goal || 0) + 1);
+    }
+  }
+  if (g.assist === id) crit.assist = (parseInt(crit.assist || 0) + 1);
+  return crit;
 }
 
 // ─── HELPERY OGÓLNE ───────────────────────────────────────────────────────────

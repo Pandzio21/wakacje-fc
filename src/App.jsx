@@ -5,7 +5,7 @@ import {
   GOAL_TYPES, GICO, RESULT_COLOR, RESULT_ICON, CAT_LABELS,
   HALF_MIN, PHASE_ORDER, PHASE_LABELS, goalPhase, goalSortVal, goalLabel,
   fv, rc, safeR, medalColor,
-  calcMatchRating, getAvgRating, checkFormBonus, getSessionChangePct, calcValue, getTrend,
+  calcMatchRating, getAvgRating, checkFormBonus, getSessionChangePct, calcValue, getTrend, applyGoalToCriteria,
   FIRST_SEASON_END, todayStr, addDaysStr, fmtPL,
   seasonIndexOf, seasonRange, matchKeyOf, getMatches, buildSeasons,
   computeSeasonAwards, getLastCompletedSeasonAwards, normalizePlayers,
@@ -23,6 +23,7 @@ const EMPTY_WIZ = () => ({
   step:"1", date:todayStr(), teamAName:"", teamBName:"",
   teamA:[], teamB:[], goals:[], ratings:{}, activeP:null,
   extraTime:false, pensOn:false, pensA:"", pensB:"",
+  editingKey:null,
 });
 
 // ─── PASEK KROKÓW ─────────────────────────────────────────────────────────────
@@ -48,7 +49,8 @@ function StepBar({ step }) {
 
 // ─── KREATOR MECZU ────────────────────────────────────────────────────────────
 function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
-  const { step, date, teamAName, teamBName, teamA, teamB, goals, ratings, activeP, extraTime, pensOn, pensA, pensB } = wiz;
+  const { step, date, teamAName, teamBName, teamA, teamB, goals, ratings, activeP, extraTime, pensOn, pensA, pensB, editingKey } = wiz;
+  const isEdit = !!editingKey;
   const W = (upd) => setWiz(w => ({ ...w, ...upd }));
   const scoreA = goals.filter(g => g.teamSide==="A").length;
   const scoreB = goals.filter(g => g.teamSide==="B").length;
@@ -69,6 +71,11 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
   // STEP 1 ───────────────────────────────────────────────────────────────────
   if (step==="1") return (
     <div style={{ marginTop:16 }}>
+      {isEdit && (
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", background:"rgba(255,107,53,.12)", border:"1px solid #ff6b35", borderRadius:8, padding:"8px 12px", marginBottom:12 }}>
+          <span style={{ fontSize:12, fontWeight:700, color:"#ffb088" }}>✏️ Edytujesz istniejący mecz</span>
+        </div>
+      )}
       <p style={{ fontSize:12, color:"#64748b", margin:"0 0 16px" }}>Wybierz datę, nazwij drużyny i dodaj zawodników. Zawodnicy „spoza klasy" są oceniani, ale nie liczą się do rankingu ani statystyk sezonu.</p>
       <div style={{ background:"#221640", border:"1px solid #3b1f5c", borderRadius:12, padding:20 }}>
         <StepBar step={step} />
@@ -124,18 +131,20 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
           {goals.length===0 && <div style={{ fontSize:12, color:"#334155", textAlign:"center", padding:"16px 0", fontStyle:"italic" }}>Brak goli – dodaj powyżej lub przejdź dalej</div>}
           {goals.map((g, gi) => {
             const isA = g.teamSide==="A";
-            const pool = isA ? tA : tB;
-            const noA = g.type==="penalty" || g.type==="noAssist";
+            const isOG = g.type==="ownGoal";
+            // Przy samobóju gol liczy się dla drużyny `teamSide`, ale strzela go zawodnik drużyny PRZECIWNEJ
+            const pool = isOG ? (isA ? tB : tA) : (isA ? tA : tB);
+            const noA = g.type==="penalty" || g.type==="noAssist" || isOG;
             return (
-              <div key={g.id} style={{ background:"#0c0a1d", border:`1px solid ${isA?"#ff6b35":"#00d9c0"}33`, borderRadius:10, padding:"12px", marginBottom:8 }}>
+              <div key={g.id} style={{ background:"#0c0a1d", border:`1px solid ${isOG?"#ef4444":(isA?"#ff6b35":"#00d9c0")}33`, borderRadius:10, padding:"12px", marginBottom:8 }}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
-                  <div style={{ fontWeight:700, fontSize:12, color:isA?"#ffb088":"#7ef5e5" }}>● Gol {gi+1} · {isA?(teamAName||"A"):(teamBName||"B")}</div>
+                  <div style={{ fontWeight:700, fontSize:12, color:isA?"#ffb088":"#7ef5e5" }}>● Gol {gi+1} · {isA?(teamAName||"A"):(teamBName||"B")}{isOG && <span style={{ color:"#ef4444", marginLeft:5 }}>(samobój)</span>}</div>
                   <button onClick={() => rm(g.id)} style={{ background:"none", border:"none", color:"#475569", cursor:"pointer", fontSize:16 }}>✕</button>
                 </div>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:8 }}>
                   <div>
-                    <label style={lbl}>Strzelec</label>
-                    <select value={g.scorer} onChange={e => upd(g.id,{ scorer:e.target.value })} style={sel}>
+                    <label style={lbl}>{isOG ? `Strzelec (${isA?(teamBName||"B"):(teamAName||"A")} – samobój)` : "Strzelec"}</label>
+                    <select value={g.scorer} onChange={e => upd(g.id,{ scorer:e.target.value })} style={{ ...sel, borderColor:isOG?"#ef4444":"#3b1f5c" }}>
                       <option value="">— —</option>
                       {pool.map(p => <option key={p.id} value={p.id}>{p.name}{p.random?" (spoza)":""}</option>)}
                     </select>
@@ -171,9 +180,13 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
                 </div>
                 <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
                   {GOAL_TYPES.map(t => (
-                    <button key={t.id} onClick={() => upd(g.id,{ type:t.id, assist:(t.id==="penalty"||t.id==="noAssist")?"":g.assist })}
+                    <button key={t.id} onClick={() => {
+                        const wasOG = g.type==="ownGoal", willOG = t.id==="ownGoal";
+                        const clearScorer = wasOG !== willOG; // pula zawodników się zmienia → resetuj wybór
+                        upd(g.id,{ type:t.id, assist:(t.id==="penalty"||t.id==="noAssist"||willOG)?"":g.assist, scorer:clearScorer?"":g.scorer });
+                      }}
                       style={{ padding:"3px 9px", borderRadius:4, border:"1px solid", fontSize:11, fontWeight:600, cursor:"pointer",
-                        background:g.type===t.id?"#ff6b35":"transparent", borderColor:g.type===t.id?"#ff6b35":"#3b1f5c", color:g.type===t.id?"#fff":"#64748b" }}>
+                        background:g.type===t.id?(t.id==="ownGoal"?"#ef4444":"#ff6b35"):"transparent", borderColor:g.type===t.id?(t.id==="ownGoal"?"#ef4444":"#ff6b35"):"#3b1f5c", color:g.type===t.id?"#fff":"#64748b" }}>
                       {t.label}
                     </button>
                   ))}
@@ -231,8 +244,7 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
       const myGoals = goals.filter(g => g.scorer===activeP);
       const myAssists = goals.filter(g => g.assist===activeP);
       const pc = { ...r.criteria };
-      myGoals.forEach(g => { const t=g.type; if(t==="screamer")pc.screamer=(parseInt(pc.screamer||0)+1); else if(t==="freekick")pc.freekick=(parseInt(pc.freekick||0)+1); else if(t==="header")pc.header=(parseInt(pc.header||0)+1); else pc.goal=(parseInt(pc.goal||0)+1); });
-      myAssists.forEach(() => { pc.assist=(parseInt(pc.assist||0)+1); });
+      goals.forEach(g => applyGoalToCriteria(pc, g, activeP));
       const pr = calcMatchRating(pc, criteria);
       const curPl = players.find(x => x.id===activeP) || { value:0, matches:[], opinions:[] };
       const curV = calcValue(curPl);
@@ -247,7 +259,7 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
             </div>
             {(myGoals.length>0 || myAssists.length>0) && (
               <div style={{ display:"flex", flexWrap:"wrap", gap:4, marginBottom:12 }}>
-                {myGoals.map((g,i) => <span key={i} style={{ background:"rgba(255,107,53,.2)", border:"1px solid #ff6b35", borderRadius:4, padding:"2px 8px", fontSize:11, color:"#ffb088" }}>{GICO[g.type]||"⚽"}{g.minute?" "+goalLabel(g):""}</span>)}
+                {myGoals.map((g,i) => <span key={i} style={{ background: g.type==="ownGoal"?"rgba(239,68,68,.2)":"rgba(255,107,53,.2)", border:`1px solid ${g.type==="ownGoal"?"#ef4444":"#ff6b35"}`, borderRadius:4, padding:"2px 8px", fontSize:11, color:g.type==="ownGoal"?"#fca5a5":"#ffb088" }}>{GICO[g.type]||"⚽"}{g.type==="ownGoal"?" samobój":""}{g.minute?" "+goalLabel(g):""}</span>)}
                 {myAssists.map((g,i) => <span key={i} style={{ background:"rgba(20,184,166,.2)", border:"1px solid #14b8a6", borderRadius:4, padding:"2px 8px", fontSize:11, color:"#5eead4" }}>🎯{g.minute?" "+goalLabel(g):""}</span>)}
               </div>
             )}
@@ -290,7 +302,8 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
         </div>
       );
     }
-    const gByP = {}; goals.forEach(g => { if (g.scorer) gByP[g.scorer]=(gByP[g.scorer]||0)+1; });
+    const gByP = {}, ogByP = {};
+    goals.forEach(g => { if (g.scorer) { if (g.type==="ownGoal") ogByP[g.scorer]=(ogByP[g.scorer]||0)+1; else gByP[g.scorer]=(gByP[g.scorer]||0)+1; } });
     return (
       <div style={{ marginTop:16 }}>
         <div style={{ background:"#221640", border:"1px solid #3b1f5c", borderRadius:12, padding:20 }}>
@@ -307,9 +320,9 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
                 {ids.map(id => {
                   const p = ALL_PLAYERS.find(x => x.id===id); if (!p) return null;
                   const hasR = ratings[id] && Object.values(ratings[id].criteria||{}).some(v => parseInt(v)>0);
-                  const pG = gByP[id]||0, pA = goals.filter(g => g.assist===id).length;
+                  const pG = gByP[id]||0, pOG = ogByP[id]||0, pA = goals.filter(g => g.assist===id).length;
                   const crit = { ...(ratings[id]?.criteria||{}) };
-                  goals.forEach(g => { if(g.scorer===id){const t=g.type; if(t==="screamer")crit.screamer=(parseInt(crit.screamer||0)+1); else if(t==="freekick")crit.freekick=(parseInt(crit.freekick||0)+1); else if(t==="header")crit.header=(parseInt(crit.header||0)+1); else crit.goal=(parseInt(crit.goal||0)+1);} if(g.assist===id)crit.assist=(parseInt(crit.assist||0)+1); });
+                  goals.forEach(g => applyGoalToCriteria(crit, g, id));
                   const pr = calcMatchRating(crit, criteria);
                   return (
                     <button key={id} onClick={() => W({ activeP:id })}
@@ -318,6 +331,7 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
                       <div style={{ fontSize:10, color:"#475569", marginBottom:5 }}>{p.position}</div>
                       <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginBottom:5 }}>
                         {pG>0 && <span style={{ fontSize:10, background:"rgba(255,107,53,.2)", border:"1px solid #ff6b35", borderRadius:3, padding:"1px 5px", color:"#ffb088" }}>⚽{pG}</span>}
+                        {pOG>0 && <span style={{ fontSize:10, background:"rgba(239,68,68,.2)", border:"1px solid #ef4444", borderRadius:3, padding:"1px 5px", color:"#fca5a5" }}>😬{pOG}</span>}
                         {pA>0 && <span style={{ fontSize:10, background:"rgba(20,184,166,.2)", border:"1px solid #14b8a6", borderRadius:3, padding:"1px 5px", color:"#5eead4" }}>🎯{pA}</span>}
                       </div>
                       <div style={{ fontSize:16, fontWeight:900, color:rc(pr) }}>{pr.toFixed(2)}</div>
@@ -362,12 +376,14 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
               <div style={{ fontSize:11, fontWeight:700, color:"#64748b", marginBottom:8, letterSpacing:.5 }}>GOLE</div>
               {[...goals].sort((a,b) => goalSortVal(a)-goalSortVal(b)).map((g,i) => {
                 const isA = g.teamSide==="A";
+                const isOG = g.type==="ownGoal";
                 return (
                   <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#0c0a1d", borderRadius:6, marginBottom:4, borderLeft:`3px solid ${isA?"#ff6b35":"#00d9c0"}` }}>
                     <span style={{ fontSize:11, color:"#475569", minWidth:34 }}>{goalLabel(g)}</span>
                     <span style={{ fontSize:9, color:"#475569" }}>{PHASE_LABELS[goalPhase(g)].split(".")[0]}{goalPhase(g)==="ET"?"":"."}</span>
                     <span>{GICO[g.type]||"⚽"}</span>
                     <span style={{ fontWeight:700, fontSize:13, color:"#e2e8f0" }}>{nameOf(g.scorer)}</span>
+                    {isOG && <span style={{ fontSize:10, color:"#ef4444" }}>(samobój)</span>}
                     {g.assist && <span style={{ fontSize:11, color:"#5eead4" }}>🎯 {nameOf(g.assist)}</span>}
                     <span style={{ marginLeft:"auto", fontSize:10, color:isA?"#ffb088":"#7ef5e5" }}>{isA?(teamAName||"A"):(teamBName||"B")}</span>
                   </div>
@@ -380,7 +396,7 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
             const p = ALL_PLAYERS.find(x => x.id===id); if (!p) return null;
             const r = ratings[id] || { criteria:{}, note:"" };
             const crit = { ...r.criteria };
-            goals.forEach(g => { if(g.scorer===id){const t=g.type; if(t==="screamer")crit.screamer=(parseInt(crit.screamer||0)+1); else if(t==="freekick")crit.freekick=(parseInt(crit.freekick||0)+1); else if(t==="header")crit.header=(parseInt(crit.header||0)+1); else crit.goal=(parseInt(crit.goal||0)+1);} if(g.assist===id)crit.assist=(parseInt(crit.assist||0)+1); });
+            goals.forEach(g => applyGoalToCriteria(crit, g, id));
             const rating = calcMatchRating(crit, criteria);
             const inA = teamA.includes(id);
             return (
@@ -393,7 +409,7 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
           <div style={{ display:"flex", gap:8, marginTop:16 }}>
             <button onClick={() => W({ step:"3" })} style={{ padding:"9px 16px", background:"transparent", border:"1px solid #3b1f5c", borderRadius:8, color:"#64748b", fontSize:13, cursor:"pointer" }}>← Wróć</button>
             <button onClick={onSubmit} style={{ flex:1, padding:"13px", background:"linear-gradient(135deg,#ff6b35,#e0289d)", border:"none", borderRadius:8, color:"#fff", fontSize:14, fontWeight:800, cursor:"pointer" }}>
-              💾 Zapisz mecz dla wszystkich
+              {isEdit ? "💾 Zapisz zmiany w meczu" : "💾 Zapisz mecz dla wszystkich"}
             </button>
           </div>
         </div>
@@ -489,11 +505,13 @@ function MatchTimeline({ entry }) {
 
   const Row = (g, i) => {
     const isA = g.teamSide==="A";
+    const isOG = g.type==="ownGoal";
     return (
       <div key={i} style={{ display:"flex", alignItems:"center", gap:7, padding:"4px 8px", background:"#0c0a1d", borderRadius:5, marginBottom:3, borderLeft:`2px solid ${isA?"#ff6b35":"#00d9c0"}` }}>
         <span style={{ fontSize:11, color:"#475569", minWidth:30 }}>{goalLabel(g)}</span>
         <span style={{ fontSize:12 }}>{GICO[g.type]||"⚽"}</span>
         <span style={{ fontWeight:700, fontSize:12, color:"#e2e8f0" }}>{nameOf(g.scorer)}</span>
+        {isOG && <span style={{ fontSize:10, color:"#ef4444" }}>(samobój)</span>}
         {g.assist && <span style={{ fontSize:11, color:"#5eead4" }}>🎯{nameOf(g.assist)}</span>}
       </div>
     );
@@ -526,7 +544,7 @@ function MatchTimeline({ entry }) {
 }
 
 // ─── KARTA MECZU (wspólna: historia + sezony) ─────────────────────────────────
-function MatchCard({ entry, criteria, admin, onShots }) {
+function MatchCard({ entry, criteria, admin, onShots, onEdit }) {
   const tAN = entry.teamAName || "Drużyna A";
   const tBN = entry.teamBName || "Drużyna B";
   const [sA, sB] = (entry.score || "0:0").split(":").map(Number);
@@ -537,7 +555,8 @@ function MatchCard({ entry, criteria, admin, onShots }) {
 
   const Participant = (pp) => {
     const r = pp.rating;
-    const pG = goals.filter(g => g.scorer===pp.id).length;
+    const pG = goals.filter(g => g.scorer===pp.id && g.type!=="ownGoal").length;
+    const pOG = goals.filter(g => g.scorer===pp.id && g.type==="ownGoal").length;
     const pA = goals.filter(g => g.assist===pp.id).length;
     return (
       <div key={pp.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"4px 0", borderBottom:"1px solid #221640" }}>
@@ -545,6 +564,7 @@ function MatchCard({ entry, criteria, admin, onShots }) {
           {pp.name}
           {pp.random && <span style={{ fontSize:9, color:"#475569", marginLeft:4 }}>spoza</span>}
           {pG>0 && <span style={{ fontSize:10, color:"#ffb088", marginLeft:4 }}>⚽{pG}</span>}
+          {pOG>0 && <span style={{ fontSize:10, color:"#ef4444", marginLeft:4 }}>😬{pOG}</span>}
           {pA>0 && <span style={{ fontSize:10, color:"#5eead4", marginLeft:2 }}>🎯{pA}</span>}
         </div>
         <span style={{ fontSize:13, fontWeight:800, color:rc(r) }}>{r.toFixed(2)}</span>
@@ -559,16 +579,24 @@ function MatchCard({ entry, criteria, admin, onShots }) {
           <div style={{ fontSize:11, color:"#334155", marginBottom:4 }}>{fmtPL(entry.date)}</div>
           <div style={{ fontSize:13, fontWeight:700, color:"#e2e8f0" }}>{tAN} <span style={{ color:"#334155" }}>vs</span> {tBN}</div>
         </div>
-        <div style={{ textAlign:"center" }}>
-          <div style={{ fontSize:28, fontWeight:900, letterSpacing:-1 }}>
-            <span style={{ color:"#ffb088" }}>{isNaN(sA)?0:sA}</span>
-            <span style={{ color:"#334155", margin:"0 4px" }}>:</span>
-            <span style={{ color:"#7ef5e5" }}>{isNaN(sB)?0:sB}</span>
-          </div>
-          {(entry.extraTime || showPens) && (
-            <div style={{ fontSize:9, color:"#c9a8e0", marginTop:2 }}>
-              {entry.extraTime && "po dogr."}{entry.extraTime && showPens && " · "}{showPens && `k. ${pens.a}:${pens.b}`}
+        <div style={{ display:"flex", alignItems:"flex-start", gap:10 }}>
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontSize:28, fontWeight:900, letterSpacing:-1 }}>
+              <span style={{ color:"#ffb088" }}>{isNaN(sA)?0:sA}</span>
+              <span style={{ color:"#334155", margin:"0 4px" }}>:</span>
+              <span style={{ color:"#7ef5e5" }}>{isNaN(sB)?0:sB}</span>
             </div>
+            {(entry.extraTime || showPens) && (
+              <div style={{ fontSize:9, color:"#c9a8e0", marginTop:2 }}>
+                {entry.extraTime && "po dogr."}{entry.extraTime && showPens && " · "}{showPens && `k. ${pens.a}:${pens.b}`}
+              </div>
+            )}
+          </div>
+          {admin && onEdit && (
+            <button onClick={onEdit} title="Edytuj mecz"
+              style={{ background:"rgba(255,107,53,.12)", border:"1px solid #ff6b35", borderRadius:7, color:"#ffb088", cursor:"pointer", fontSize:12, padding:"5px 8px", fontWeight:700 }}>
+              ✏️
+            </button>
           )}
         </div>
       </div>
@@ -1003,7 +1031,7 @@ function MainApp({ readOnly, onExit }) {
   }
 
   function submitMatchWizard() {
-    const { date, teamAName, teamBName, teamA, teamB, goals, ratings, extraTime, pensOn, pensA, pensB } = wiz;
+    const { date, teamAName, teamBName, teamA, teamB, goals, ratings, extraTime, pensOn, pensA, pensB, editingKey } = wiz;
     const sA = goals.filter(g => g.teamSide==="A").length;
     const sB = goals.filter(g => g.teamSide==="B").length;
     const score = `${sA}:${sB}`;
@@ -1015,25 +1043,71 @@ function MainApp({ readOnly, onExit }) {
       return "Remis";
     };
     const mid = Date.now();
+    const isEdit = !!editingKey;
     const next = players.map(p => {
       const inA = teamA.includes(p.id), inB = teamB.includes(p.id);
-      if (!inA && !inB) return p;
+      // przy edycji: najpierw usuń stary wpis tego meczu u każdego zawodnika (jeśli grał poprzednio)
+      const baseMatches = isEdit ? p.matches.filter(m => matchKeyOf(m) !== editingKey) : p.matches;
+      if (!inA && !inB) return isEdit ? { ...p, matches: baseMatches } : p;
       const side = inA ? "A" : "B";
       const opp = side==="A" ? (teamBName||"Drużyna B") : (teamAName||"Drużyna A");
       const r = ratings[p.id] || { criteria:{}, note:"" };
       const crit = { ...r.criteria };
-      goals.forEach(g => { if(g.scorer===p.id){const t=g.type; if(t==="screamer")crit.screamer=(parseInt(crit.screamer||0)+1); else if(t==="freekick")crit.freekick=(parseInt(crit.freekick||0)+1); else if(t==="header")crit.header=(parseInt(crit.header||0)+1); else crit.goal=(parseInt(crit.goal||0)+1);} if(g.assist===p.id)crit.assist=(parseInt(crit.assist||0)+1); });
+      goals.forEach(g => applyGoalToCriteria(crit, g, p.id));
       const rating = calcMatchRating(crit, criteria);
       const myGoals = goals.filter(g => g.scorer===p.id || g.assist===p.id);
-      return { ...p, matches:[ ...p.matches, {
+      return { ...p, matches:[ ...baseMatches, {
         id: mid+Math.random(), date, opponent:opp, score, result:resFor(side), rating, criteria:crit, note:r.note,
         goals: myGoals, teamA, teamB, teamAName, teamBName, shots:null, extraTime:et, penalties:pens,
       } ] };
     });
     commit(next);
-    showToast(`✅ Mecz zapisany! ${sA}:${sB}`);
+    showToast(isEdit ? `✅ Mecz zaktualizowany! ${sA}:${sB}` : `✅ Mecz zapisany! ${sA}:${sB}`);
     setWiz(EMPTY_WIZ());
-    setView("ranking");
+    setView(isEdit ? "history" : "ranking");
+  }
+
+  // ładuje istniejący mecz z powrotem do kreatora, do edycji
+  function startEditMatch(entry) {
+    const teamA = entry.teamA || [];
+    const teamB = entry.teamB || [];
+    const ratings = {};
+    entry.participants.forEach(pp => {
+      ratings[pp.id] = { criteria: { ...(pp.criteria || {}) }, note: pp.match?.note || "" };
+    });
+    // usuń z kryteriów wkład samych goli/asyst, bo applyGoalToCriteria doda je z powrotem na podstawie `goals`
+    const stripGoalContrib = (crit, id) => {
+      const c = { ...crit };
+      (entry.goals || []).forEach(g => {
+        if (g.scorer === id) {
+          if (g.type === "ownGoal") c.own_goal = Math.max(0, parseInt(c.own_goal || 0) - 1);
+          else if (g.type === "screamer") c.screamer = Math.max(0, parseInt(c.screamer || 0) - 1);
+          else if (g.type === "freekick") c.freekick = Math.max(0, parseInt(c.freekick || 0) - 1);
+          else if (g.type === "header") c.header = Math.max(0, parseInt(c.header || 0) - 1);
+          else c.goal = Math.max(0, parseInt(c.goal || 0) - 1);
+        }
+        if (g.assist === id) c.assist = Math.max(0, parseInt(c.assist || 0) - 1);
+      });
+      return c;
+    };
+    Object.keys(ratings).forEach(id => { ratings[id].criteria = stripGoalContrib(ratings[id].criteria, id); });
+
+    setWiz({
+      step: "1",
+      date: entry.date,
+      teamAName: entry.teamAName || "",
+      teamBName: entry.teamBName || "",
+      teamA, teamB,
+      goals: (entry.goals || []).map(g => ({ ...g, id: g.id != null ? g.id : (Date.now() + Math.random()) })),
+      ratings,
+      activeP: null,
+      extraTime: !!entry.extraTime,
+      pensOn: !!(entry.penalties && (entry.penalties.a || entry.penalties.b)),
+      pensA: entry.penalties ? String(entry.penalties.a ?? "") : "",
+      pensB: entry.penalties ? String(entry.penalties.b ?? "") : "",
+      editingKey: entry.key,
+    });
+    setView("add");
   }
 
   function setMatchShots(key, shots) {
@@ -1148,7 +1222,7 @@ function MainApp({ readOnly, onExit }) {
               <div style={{ marginTop:20 }}>
                 <div style={LABEL}>HISTORIA MECZÓW</div>
                 {[...matches].sort((a,b) => b.date.localeCompare(a.date)).map((e,i) => (
-                  <MatchCard key={i} entry={e} criteria={criteria} admin={!readOnly} onShots={(s) => setMatchShots(e.key, s)} />
+                  <MatchCard key={i} entry={e} criteria={criteria} admin={!readOnly} onShots={(s) => setMatchShots(e.key, s)} onEdit={!readOnly ? () => startEditMatch(e) : null} />
                 ))}
               </div>
             )
@@ -1227,7 +1301,20 @@ function MainApp({ readOnly, onExit }) {
         {view==="info" && <InfoView />}
 
         {/* DODAJ MECZ (admin) */}
-        {view==="add" && !readOnly && <MatchWizard wiz={wiz} setWiz={setWiz} players={players} criteria={criteria} onSubmit={submitMatchWizard} />}
+        {view==="add" && !readOnly && (
+          <div>
+            {wiz.editingKey && (
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:16 }}>
+                <div style={LABEL}>EDYCJA MECZU</div>
+                <button onClick={() => { setWiz(EMPTY_WIZ()); setView("history"); }}
+                  style={{ background:"transparent", border:"1px solid #3b1f5c", borderRadius:7, color:"#64748b", fontSize:11, padding:"5px 10px", cursor:"pointer" }}>
+                  ✕ Anuluj edycję
+                </button>
+              </div>
+            )}
+            <MatchWizard wiz={wiz} setWiz={setWiz} players={players} criteria={criteria} onSubmit={submitMatchWizard} />
+          </div>
+        )}
 
         {/* OPINIE (admin) */}
         {view==="opinions" && !readOnly && (
@@ -1387,7 +1474,7 @@ function MainApp({ readOnly, onExit }) {
                         </div>
                         {Array.isArray(m.goals) && m.goals.length>0 && (
                           <div style={{ display:"flex", flexWrap:"wrap", gap:4, marginBottom:5 }}>
-                            {m.goals.filter(g => g.scorer===p.id).map((g,gi) => <span key={gi} style={{ background:"rgba(255,107,53,.2)", border:"1px solid #ff6b35", borderRadius:4, padding:"2px 7px", fontSize:10, color:"#ffb088" }}>{GICO[g.type]||"⚽"}{g.minute?" "+goalLabel(g):""}</span>)}
+                            {m.goals.filter(g => g.scorer===p.id).map((g,gi) => <span key={gi} style={{ background:g.type==="ownGoal"?"rgba(239,68,68,.2)":"rgba(255,107,53,.2)", border:`1px solid ${g.type==="ownGoal"?"#ef4444":"#ff6b35"}`, borderRadius:4, padding:"2px 7px", fontSize:10, color:g.type==="ownGoal"?"#fca5a5":"#ffb088" }}>{GICO[g.type]||"⚽"}{g.minute?" "+goalLabel(g):""}</span>)}
                             {m.goals.filter(g => g.assist===p.id).map((g,gi) => <span key={gi} style={{ background:"rgba(20,184,166,.2)", border:"1px solid #14b8a6", borderRadius:4, padding:"2px 7px", fontSize:10, color:"#5eead4" }}>🎯{g.minute?" "+goalLabel(g):""}</span>)}
                           </div>
                         )}
