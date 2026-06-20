@@ -376,3 +376,46 @@ export function normalizePlayers(loaded) {
   });
   return [...build(PLAYERS, false), ...build(RANDOM_PLAYERS, true)];
 }
+
+// ─── SERIE DO WYKRESÓW ────────────────────────────────────────────────────────
+export const SEASON_COLORS = ["#ff6b35","#00d9c0","#a855f7","#fbbf24","#22c55e","#ef4444","#3b82f6","#ec4899","#f97316","#14b8a6"];
+export const seasonColor = (idx) => SEASON_COLORS[(((idx - 1) % SEASON_COLORS.length) + SEASON_COLORS.length) % SEASON_COLORS.length];
+
+// Wartość po każdym meczu (narastająco) — punkty {x,y,date,season}; x=0 to wartość bazowa
+export function valueSeries(player) {
+  const ms = [...(player.matches || [])].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const ops = player.opinions || [];
+  const out = [{
+    x: 0, y: player.value,
+    date: ms.length ? ms[0].date : todayStr(),
+    season: ms.length ? seasonIndexOf(ms[0].date) : seasonIndexOf(todayStr()),
+  }];
+  ms.forEach((m, idx) => {
+    const prefix = ms.slice(0, idx + 1);
+    const opsUpTo = ops.filter(o => !o.date || o.date <= m.date);
+    out.push({ x: idx + 1, y: calcValueFrom(player.value, prefix, opsUpTo), date: m.date, season: seasonIndexOf(m.date) });
+  });
+  return out;
+}
+
+// Seria wybranej metryki: value | avg | goals | assists | bangers | rating
+export function metricSeries(player, metric) {
+  if (metric === "value") return valueSeries(player);
+  const ms = [...(player.matches || [])].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const out = [];
+  let cum = 0, sum = 0;
+  ms.forEach((m, idx) => {
+    const c = m.criteria || {};
+    let y;
+    if (metric === "goals") { cum += parseInt(c.goal || 0) + parseInt(c.header || 0) + parseInt(c.freekick || 0) + parseInt(c.screamer || 0); y = cum; }
+    else if (metric === "assists") { cum += parseInt(c.assist || 0); y = cum; }
+    else if (metric === "bangers") { cum += parseInt(c.screamer || 0); y = cum; }
+    else if (metric === "avg") { sum += safeR(m); y = sum / (idx + 1); }
+    else { y = safeR(m); } // rating: ocena z meczu
+    out.push({ x: idx + 1, y, date: m.date, season: seasonIndexOf(m.date) });
+  });
+  if (metric === "goals" || metric === "assists" || metric === "bangers") {
+    out.unshift({ x: 0, y: 0, date: ms.length ? ms[0].date : todayStr(), season: ms.length ? seasonIndexOf(ms[0].date) : 1 });
+  }
+  return out;
+}

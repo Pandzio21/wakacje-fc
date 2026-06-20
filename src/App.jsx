@@ -9,6 +9,7 @@ import {
   FIRST_SEASON_END, todayStr, addDaysStr, fmtPL,
   seasonIndexOf, seasonRange, matchKeyOf, getMatches, buildSeasons,
   computeSeasonAwards, getLastCompletedSeasonAwards, normalizePlayers,
+  SEASON_COLORS, seasonColor, valueSeries, metricSeries,
 } from "./logic.js";
 
 // ─── WSPÓLNE STYLE ────────────────────────────────────────────────────────────
@@ -803,12 +804,154 @@ function InfoView() {
   );
 }
 
+// ─── WYKRES LINIOWY (SVG, bez bibliotek) ──────────────────────────────────────
+function LineChart({ lines, bands, yFormat = (v) => String(v), height = 210 }) {
+  const W = 620, H = height, padL = 60, padR = 16, padT = 16, padB = 30;
+  const all = (lines || []).flatMap(l => l.pts || []);
+  if (all.length < 1) return <div style={{ fontSize:12, color:"#475569", padding:"24px 0", textAlign:"center" }}>Brak danych do wykresu</div>;
+  const xs = all.map(p => p.x), ys = all.map(p => p.y);
+  let minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+  if (minX === maxX) maxX = minX + 1;
+  if (minY === maxY) { minY = minY - 1; maxY = maxY + 1; }
+  const yr = maxY - minY; minY -= yr * 0.08; maxY += yr * 0.08;
+  const sx = (x) => padL + ((x - minX) / (maxX - minX)) * (W - padL - padR);
+  const sy = (y) => padT + (1 - ((y - minY) / (maxY - minY))) * (H - padT - padB);
+  const ticks = [0, 1, 2, 3, 4].map(k => minY + (k / 4) * (maxY - minY));
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width:"100%", height:"auto", display:"block" }}>
+      {(bands || []).map((b, i) => (
+        <rect key={"b" + i} x={sx(b.x0)} y={padT} width={Math.max(0, sx(b.x1) - sx(b.x0))} height={H - padT - padB} fill={b.color} opacity="0.13" />
+      ))}
+      {ticks.map((t, i) => (
+        <g key={"t" + i}>
+          <line x1={padL} x2={W - padR} y1={sy(t)} y2={sy(t)} stroke="#221640" strokeWidth="1" />
+          <text x={padL - 7} y={sy(t) + 3} textAnchor="end" fontSize="10" fill="#64748b">{yFormat(t)}</text>
+        </g>
+      ))}
+      {(lines || []).map((l, li) => {
+        const pts = l.pts || [];
+        if (pts.length < 2) return pts.map((p, i) => <circle key={"p" + li + "-" + i} cx={sx(p.x)} cy={sy(p.y)} r="3.5" fill={l.color} />);
+        const d = pts.map((p, i) => `${i === 0 ? "M" : "L"}${sx(p.x).toFixed(1)},${sy(p.y).toFixed(1)}`).join(" ");
+        return (
+          <g key={"l" + li}>
+            <path d={d} fill="none" stroke={l.color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />
+            {pts.map((p, i) => <circle key={i} cx={sx(p.x)} cy={sy(p.y)} r="2.2" fill={l.color} />)}
+          </g>
+        );
+      })}
+      <line x1={padL} x2={W - padR} y1={H - padB} y2={H - padB} stroke="#3b1f5c" strokeWidth="1" />
+      <text x={padL} y={H - padB + 16} textAnchor="start" fontSize="10" fill="#475569">mecz {Math.round(minX)}</text>
+      <text x={W - padR} y={H - padB + 16} textAnchor="end" fontSize="10" fill="#475569">mecz {Math.round(maxX)}</text>
+    </svg>
+  );
+}
+
+// kolorowe przedziały sezonów wzdłuż osi X
+function seasonBands(pts) {
+  const g = [];
+  pts.forEach(p => { const last = g[g.length - 1]; if (last && last.season === p.season) last.i1 = p.x; else g.push({ season: p.season, i0: p.x, i1: p.x }); });
+  return g.map((grp, k) => ({
+    x0: k === 0 ? grp.i0 - 0.3 : (g[k - 1].i1 + grp.i0) / 2,
+    x1: k === g.length - 1 ? grp.i1 + 0.3 : (grp.i1 + g[k + 1].i0) / 2,
+    color: seasonColor(grp.season), season: grp.season,
+  }));
+}
+
+function PlayerValueChart({ player }) {
+  if (!player.matches || player.matches.length === 0) {
+    return <div style={{ fontSize:12, color:"#475569", textAlign:"center", padding:"18px 0" }}>Brak meczów — wykres pojawi się po pierwszym meczu.</div>;
+  }
+  const pts = valueSeries(player);
+  const bands = seasonBands(pts);
+  const seasonsShown = [...new Set(pts.map(p => p.season))].sort((a, b) => a - b);
+  return (
+    <div>
+      <LineChart lines={[{ name: player.name, color: "#ff6b35", pts }]} bands={bands} yFormat={(v) => fv(v)} />
+      <div style={{ display:"flex", flexWrap:"wrap", gap:10, marginTop:6, justifyContent:"center" }}>
+        {seasonsShown.map(s => (
+          <span key={s} style={{ display:"flex", alignItems:"center", gap:4, fontSize:10, color:"#94a3b8" }}>
+            <span style={{ width:10, height:10, borderRadius:2, background:seasonColor(s), opacity:.7, display:"inline-block" }} />
+            Sezon {s}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── PORÓWNANIE ZAWODNIKÓW ────────────────────────────────────────────────────
+const COMPARE_METRICS = [
+  { id:"value",   label:"Wycena",       fmt:(v) => fv(v) },
+  { id:"avg",     label:"Średnia ocen", fmt:(v) => v.toFixed(2) },
+  { id:"goals",   label:"Gole",         fmt:(v) => String(Math.round(v)) },
+  { id:"assists", label:"Asysty",       fmt:(v) => String(Math.round(v)) },
+  { id:"bangers", label:"Bengery",      fmt:(v) => String(Math.round(v)) },
+  { id:"rating",  label:"Ocena/mecz",   fmt:(v) => v.toFixed(2) },
+];
+
+function CompareView({ players }) {
+  const real = players.filter(p => !p.random);
+  const [a, setA] = useState(real[0]?.id || "");
+  const [b, setB] = useState(real[1]?.id || "");
+  const [metric, setMetric] = useState("value");
+  const pa = players.find(p => p.id === a);
+  const pb = players.find(p => p.id === b);
+  const m = COMPARE_METRICS.find(x => x.id === metric) || COMPARE_METRICS[0];
+  const lines = [];
+  if (pa) lines.push({ name: pa.name, color: "#ff6b35", pts: metricSeries(pa, metric) });
+  if (pb) lines.push({ name: pb.name, color: "#00d9c0", pts: metricSeries(pb, metric) });
+  const note = metric === "value" ? "Wartość liczona narastająco z całej historii."
+    : metric === "avg" ? "Średnia ocen narastająco po kolejnych meczach."
+    : metric === "rating" ? "Ocena z każdego pojedynczego meczu."
+    : "Statystyka sumowana narastająco.";
+  return (
+    <div style={{ marginTop:20 }}>
+      <div style={LABEL}>PORÓWNANIE ZAWODNIKÓW</div>
+      <div style={CARD}>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
+          <div>
+            <div style={{ fontSize:10, color:"#ffb088", fontWeight:700, marginBottom:4 }}>● Zawodnik A</div>
+            <select value={a} onChange={e => setA(e.target.value)} style={{ ...INP, borderColor:"#7c2d12" }}>
+              <option value="">— wybierz —</option>
+              {real.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <div style={{ fontSize:10, color:"#7ef5e5", fontWeight:700, marginBottom:4 }}>● Zawodnik B</div>
+            <select value={b} onChange={e => setB(e.target.value)} style={{ ...INP, borderColor:"#0e7490" }}>
+              <option value="">— wybierz —</option>
+              {real.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </div>
+        </div>
+        <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:14 }}>
+          {COMPARE_METRICS.map(mm => (
+            <button key={mm.id} onClick={() => setMetric(mm.id)}
+              style={{ padding:"5px 11px", borderRadius:6, border:`1px solid ${metric===mm.id?"#ff6b35":"#3b1f5c"}`, background:metric===mm.id?"rgba(255,107,53,.2)":"transparent", color:metric===mm.id?"#ffb088":"#64748b", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+              {mm.label}
+            </button>
+          ))}
+        </div>
+        {(pa || pb)
+          ? <LineChart lines={lines} yFormat={m.fmt} height={250} />
+          : <div style={{ fontSize:12, color:"#475569", textAlign:"center", padding:"24px 0" }}>Wybierz zawodników, żeby porównać wykresy.</div>}
+        <div style={{ display:"flex", justifyContent:"center", gap:18, marginTop:8, flexWrap:"wrap" }}>
+          {pa && <span style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:"#e2e8f0" }}><span style={{ width:11, height:11, borderRadius:3, background:"#ff6b35" }} />{pa.name}</span>}
+          {pb && <span style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:"#e2e8f0" }}><span style={{ width:11, height:11, borderRadius:3, background:"#00d9c0" }} />{pb.name}</span>}
+        </div>
+        <div style={{ fontSize:10, color:"#475569", textAlign:"center", marginTop:8 }}>Oś X = kolejne mecze danego zawodnika. {note}</div>
+      </div>
+    </div>
+  );
+}
+
 // ─── GŁÓWNA APLIKACJA ─────────────────────────────────────────────────────────
 function MainApp({ readOnly, onExit }) {
   const [players, setPlayers] = useState(() => normalizePlayers(DEFAULT_PLAYERS));
   const [criteria, setCriteria] = useState(DEFAULT_CRITERIA);
   const [view, setView] = useState("ranking");
   const [selP, setSelP] = useState(null);
+  const [expanded, setExpanded] = useState(null);
   const [wiz, setWiz] = useState(EMPTY_WIZ());
   const [opForm, setOpForm] = useState({ playerId:"", text:"", sentiment:"neutral" });
   const [toast, setToast] = useState(null);
@@ -912,8 +1055,8 @@ function MainApp({ readOnly, onExit }) {
   const matches = getMatches(players);
 
   const navItems = readOnly
-    ? [["ranking","🏆"],["history","📅"],["stats","📊"],["seasons","👑"],["criteria","📋"],["info","ℹ️"]]
-    : [["ranking","🏆"],["history","📅"],["stats","📊"],["seasons","👑"],["add","➕"],["opinions","💬"],["criteria","📋"],["editor","⚙️"],["info","ℹ️"]];
+    ? [["ranking","🏆"],["history","📅"],["stats","📊"],["compare","⚖️"],["seasons","👑"],["criteria","📋"],["info","ℹ️"]]
+    : [["ranking","🏆"],["history","📅"],["stats","📊"],["compare","⚖️"],["seasons","👑"],["add","➕"],["opinions","💬"],["criteria","📋"],["editor","⚙️"],["info","ℹ️"]];
 
   return (
     <div style={{ minHeight:"100vh", background:BG, color:"#e2e8f0", fontFamily:"'Inter',system-ui,sans-serif", paddingBottom:80 }}>
@@ -956,29 +1099,41 @@ function MainApp({ readOnly, onExit }) {
               const avg = getAvgRating(p.matches), val = calcValue(p), trend = getTrend(p.matches), chg = val-p.value;
               const formBonus = checkFormBonus(p);
               const badges = badgesFor(p.id, lca);
+              const isOpen = expanded === p.id;
               return (
-                <div key={p.id} onClick={() => { setSelP(p.id); setView("player"); }}
-                  onMouseEnter={e => e.currentTarget.style.borderColor="#ff6b35"}
-                  onMouseLeave={e => e.currentTarget.style.borderColor="#221640"}
-                  style={{ background:"#150d2e", border:"1px solid #221640", borderRadius:10, padding:"13px 16px", marginBottom:8, cursor:"pointer", display:"flex", alignItems:"center", gap:14, transition:"border-color .15s" }}>
-                  <div style={{ width:26, textAlign:"center", fontWeight:900, fontSize:15, color:i<3?["#fbbf24","#c9a8e0","#b45309"][i]:"#3b1f5c" }}>#{i+1}</div>
-                  <div style={{ flex:1 }}>
-                    <div style={{ fontWeight:700, fontSize:14, color:"#e2e8f0", display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
-                      <span>{p.name} <span style={{ fontSize:11, color:"#334155", fontWeight:400 }}>· {p.position}</span></span>
-                      {badges.map(([emoji, title], bi) => <span key={bi} title={title} style={{ fontSize:13 }}>{emoji}</span>)}
-                      {formBonus && <span style={{ fontSize:9, background:"rgba(251,191,36,.2)", border:"1px solid #fbbf24", color:"#fbbf24", borderRadius:3, padding:"1px 5px" }}>🔥 FORMA +30%</span>}
+                <div key={p.id} style={{ marginBottom:8 }}>
+                  <div onClick={() => setExpanded(isOpen ? null : p.id)}
+                    style={{ background:"#150d2e", border:`1px solid ${isOpen?"#ff6b35":"#221640"}`, borderRadius: isOpen?"10px 10px 0 0":10, padding:"13px 16px", cursor:"pointer", display:"flex", alignItems:"center", gap:14 }}>
+                    <div style={{ width:26, textAlign:"center", fontWeight:900, fontSize:15, color:i<3?["#fbbf24","#c9a8e0","#b45309"][i]:"#3b1f5c" }}>#{i+1}</div>
+                    <div style={{ flex:1 }}>
+                      <div style={{ fontWeight:700, fontSize:14, color:"#e2e8f0", display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
+                        <span>{p.name} <span style={{ fontSize:11, color:"#334155", fontWeight:400 }}>· {p.position}</span></span>
+                        {badges.map(([emoji, title], bi) => <span key={bi} title={title} style={{ fontSize:13 }}>{emoji}</span>)}
+                        {formBonus && <span style={{ fontSize:9, background:"rgba(251,191,36,.2)", border:"1px solid #fbbf24", color:"#fbbf24", borderRadius:3, padding:"1px 5px" }}>🔥 FORMA +30%</span>}
+                      </div>
+                      <div style={{ fontSize:11, color:"#334155", marginTop:1 }}>{p.matches.length} meczów · kliknij po wykres</div>
                     </div>
-                    <div style={{ fontSize:11, color:"#334155", marginTop:1 }}>{p.matches.length} meczów</div>
-                  </div>
-                  <div style={{ textAlign:"right" }}>
-                    <div style={{ fontSize:22, fontWeight:900, color:avg?rc(avg):"#3b1f5c", lineHeight:1 }}>
-                      {avg?avg.toFixed(2):"—"}
-                      <span style={{ fontSize:11, marginLeft:3, color:trend==="▲"?"#22c55e":trend==="▼"?"#ef4444":"#334155" }}>{trend}</span>
+                    <div style={{ textAlign:"right" }}>
+                      <div style={{ fontSize:22, fontWeight:900, color:avg?rc(avg):"#3b1f5c", lineHeight:1 }}>
+                        {avg?avg.toFixed(2):"—"}
+                        <span style={{ fontSize:11, marginLeft:3, color:trend==="▲"?"#22c55e":trend==="▼"?"#ef4444":"#334155" }}>{trend}</span>
+                      </div>
+                      <div style={{ fontSize:10, color:"#334155", marginBottom:2 }}>śr. ocena</div>
+                      <div style={{ fontSize:13, fontWeight:700, color:"#e2e8f0" }}>{fv(val)}</div>
+                      <div style={{ fontSize:10, color:chg>=0?"#22c55e":"#ef4444" }}>{chg>=0?"+":""}{fv(Math.abs(chg))}</div>
                     </div>
-                    <div style={{ fontSize:10, color:"#334155", marginBottom:2 }}>śr. ocena</div>
-                    <div style={{ fontSize:13, fontWeight:700, color:"#e2e8f0" }}>{fv(val)}</div>
-                    <div style={{ fontSize:10, color:chg>=0?"#22c55e":"#ef4444" }}>{chg>=0?"+":""}{fv(Math.abs(chg))}</div>
+                    <div style={{ width:12, textAlign:"center", color:isOpen?"#ff6b35":"#475569", fontSize:11 }}>{isOpen?"▲":"▼"}</div>
                   </div>
+                  {isOpen && (
+                    <div style={{ background:"#0c0a1d", border:"1px solid #ff6b35", borderTop:"none", borderRadius:"0 0 10px 10px", padding:"14px 14px 12px" }}>
+                      <div style={{ fontSize:10, color:"#64748b", marginBottom:8, letterSpacing:.5 }}>📈 WYKRES WYCENY · CAŁA HISTORIA</div>
+                      <PlayerValueChart player={p} />
+                      <button onClick={(e) => { e.stopPropagation(); setSelP(p.id); setView("player"); }}
+                        style={{ width:"100%", marginTop:10, padding:"9px", background:"transparent", border:"1px solid #3b1f5c", borderRadius:8, color:"#ffb088", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                        Pełna karta zawodnika →
+                      </button>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1064,6 +1219,9 @@ function MainApp({ readOnly, onExit }) {
 
         {/* SEZONY */}
         {view==="seasons" && <SeasonsView players={players} criteria={criteria} />}
+
+        {/* PORÓWNANIE */}
+        {view==="compare" && <CompareView players={players} />}
 
         {/* INFO */}
         {view==="info" && <InfoView />}
@@ -1204,6 +1362,12 @@ function MainApp({ readOnly, onExit }) {
                   </div>
                 </div>
               </div>
+              {p.matches.length>0 && (
+                <div style={CARD}>
+                  <div style={{ fontSize:11, fontWeight:700, color:"#334155", marginBottom:10, letterSpacing:.5 }}>📈 WYKRES WYCENY</div>
+                  <PlayerValueChart player={p} />
+                </div>
+              )}
               {mwv.length>0 && (
                 <div style={CARD}>
                   <div style={{ fontSize:11, fontWeight:700, color:"#334155", marginBottom:12, letterSpacing:.5 }}>HISTORIA MECZÓW</div>
