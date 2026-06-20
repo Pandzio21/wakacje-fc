@@ -1,18 +1,52 @@
-// Vercel Serverless Function - przechowuje dane meczów w Vercel KV (Redis)
-// Dokumentacja: https://vercel.com/docs/storage/vercel-kv
+// Vercel Serverless Function - przechowuje dane meczów w Redis (Upstash / Vercel KV)
+// Vercel KV zostało wygaszone -> użyj integracji "Upstash for Redis" z Marketplace.
+// Panel: Vercel -> projekt -> Storage -> Create Database -> Upstash for Redis -> Connect.
 
-import { kv } from '@vercel/kv';
+import { createClient } from '@vercel/kv';
 
 const KEY = 'wakacje-fc-data';
 
+// Łapiemy zmienne niezależnie od tego, jak nazwie je integracja.
+function getCreds() {
+  const url =
+    process.env.KV_REST_API_URL ||
+    process.env.UPSTASH_REDIS_REST_URL ||
+    process.env.REDIS_REST_API_URL ||
+    process.env.KV_URL;
+  const token =
+    process.env.KV_REST_API_TOKEN ||
+    process.env.UPSTASH_REDIS_REST_TOKEN ||
+    process.env.REDIS_REST_API_TOKEN;
+  return { url, token };
+}
+
+let _kv = null;
+function kvClient() {
+  if (_kv) return _kv;
+  const { url, token } = getCreds();
+  if (!url || !token) return null;
+  _kv = createClient({ url, token });
+  return _kv;
+}
+
 export default async function handler(req, res) {
-  // Allow CORS for safety (not strictly needed on same domain)
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
+  }
+
+  const kv = kvClient();
+  if (!kv) {
+    // Brak podłączonej bazy — nie wywalamy 500, dajemy czytelny komunikat.
+    if (req.method === 'GET') {
+      return res.status(404).json({ error: 'Brak podłączonej bazy danych' });
+    }
+    return res.status(503).json({
+      error: 'Baza nie jest podłączona. W Vercel: Storage → Upstash for Redis → Connect, potem Redeploy.',
+    });
   }
 
   try {
