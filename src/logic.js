@@ -36,6 +36,32 @@ export const TOP_TIER_FLOOR = 380_000_000;     // od tego progu obowiązuje zaos
 export const TOP_TIER_MIN_RATING = 9.0;        // ocena wymagana, by NIE tracić na wartości blisko limitu
 export const TOP_TIER_DROP_MULT = 4;           // mnożnik spadku wartości poniżej wymaganej oceny
 
+// ─── DOGANIANIE NISKICH WARTOŚCI ───────────────────────────────────────────────
+// Im niżej wyceniony zawodnik, tym mocniej każdy mecz przekłada się procentowo na jego wartość
+// (łatwiej nadrobić dystans), bez zmiany matematyki dla średnich/wysokich wartości.
+export const CATCHUP_FLOOR = 5_000_000;   // poniżej tej wartości — najsilniejsze wzmocnienie
+export const CATCHUP_CEIL  = 40_000_000;  // od tej wartości w górę — brak dodatkowego wzmocnienia (oryginalne tempo)
+export const CATCHUP_MAX_MULT = 2.2;      // maksymalny mnożnik tempa zmian tuż przy CATCHUP_FLOOR
+
+// ─── VIRAL MOMENT (losowy bonus po dobrym meczu) ──────────────────────────────
+export const VIRAL_MIN_RATING = 7.5;   // próg oceny meczu, od którego jest szansa na "viral moment"
+export const VIRAL_CHANCE = 0.18;      // szansa na wystąpienie przy spełnionym progu oceny
+export const VIRAL_BONUS_MIN = 0.04;   // min. jednorazowy bonus (% obecnej wartości)
+export const VIRAL_BONUS_MAX = 0.09;   // maks. jednorazowy bonus (% obecnej wartości)
+
+// ─── KAMIENIE MILOWE (rosnące progi z jednorazowym bonusem) ──────────────────
+export const MILESTONE_BONUS_MIN = 15_000_000;
+export const MILESTONE_BONUS_MAX = 20_000_000;
+// Lista progów: co 5mln do 50mln, potem co 25mln do 200mln, potem co 50mln do limitu.
+export function buildMilestones() {
+  const out = [];
+  for (let v = 5_000_000; v <= 50_000_000; v += 5_000_000) out.push(v);
+  for (let v = 75_000_000; v <= 200_000_000; v += 25_000_000) out.push(v);
+  for (let v = 250_000_000; v <= MAX_VALUE; v += 50_000_000) out.push(v);
+  return out;
+}
+export const MILESTONES = buildMilestones();
+
 export const DEFAULT_CRITERIA = [
   { id:"goal",             label:"⚽ Gol",               desc:"Trafił do siatki",                      points:0.40,  cat:"pos" },
   { id:"assist",           label:"🎯 Asysta",             desc:"Podał bezpośrednio na gola",            points:0.30,  cat:"pos" },
@@ -131,11 +157,24 @@ export function applyGoalToCriteria(crit, g, id) {
 
 // ─── HELPERY OGÓLNE ───────────────────────────────────────────────────────────
 export const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
+
+// Deterministyczny generator pseudolosowy oparty o string seed (np. id meczu + id zawodnika).
+// Dzięki temu "losowe" zdarzenia (viral moment) są STABILNE między odświeżeniami strony —
+// ten sam mecz zawsze da ten sam wynik, zamiast migać losowo przy każdym renderze.
+function seededRand01(seed) {
+  let h = 2166136261 >>> 0;
+  const s = String(seed);
+  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+  h ^= h >>> 13; h = Math.imul(h, 0x5bd1e995); h ^= h >>> 15;
+  return (h >>> 0) / 4294967296; // 0..1
+}
 export const fv = (v) => {
   const n = Math.abs(v || 0);
   return n >= 1e6 ? `€${(v / 1e6).toFixed(1)}M` : `€${(v / 1e3).toFixed(0)}K`;
 };
 export const rc = (r) => r >= 8 ? "#22c55e" : r >= 7 ? "#84cc16" : r >= 6.5 ? "#f59e0b" : r >= 5.5 ? "#f97316" : "#ef4444";
+// Kolor badge'a oceny w stylu SofaScore: turkus (znakomita) → niebieski (bardzo dobra) → pomarańcz (przeciętna) → czerwień (słaba)
+export const rcSofa = (r) => r >= 8.5 ? "#0ea5a8" : r >= 7.0 ? "#3461eb" : r >= 6.0 ? "#f08a1c" : "#e0303f";
 export const safeR = (m) => typeof m.rating === "number" ? m.rating : parseFloat(m.rating) || BASE_RATING;
 export const medalColor = (i) => i === 0 ? "#fbbf24" : i === 1 ? "#c9a8e0" : i === 2 ? "#b45309" : "#3b1f5c";
 
@@ -166,11 +205,20 @@ export function checkFormBonus(player) {
   else                { const r = recentN(3); return r.length===3 && r.every(m => contrib(m)>=3 || safeR(m)>9.2); }
 }
 
+// Mnożnik tempa zmian dla niskich wartości — im bliżej CATCHUP_FLOOR, tym mocniej
+// każdy mecz przekłada się na wartość (łatwiej nadrobić dystans). Liniowo zanika do 1.0 przy CATCHUP_CEIL.
+export function catchupMult(cur) {
+  if (cur >= CATCHUP_CEIL) return 1;
+  if (cur <= CATCHUP_FLOOR) return CATCHUP_MAX_MULT;
+  const t = (cur - CATCHUP_FLOOR) / (CATCHUP_CEIL - CATCHUP_FLOOR); // 0 przy floor, 1 przy ceil
+  return CATCHUP_MAX_MULT - t * (CATCHUP_MAX_MULT - 1);
+}
+
 // rating = ocena z danego meczu (potrzebna do sprawdzenia progu utrzymania blisko limitu €400M)
 export function getSessionChangePct(cur, rd, rating) {
   const tier = Math.log10(Math.max(cur, 100_000) / 300_000 + 1);
-  const base = 0.08 / tier;
-  let pct = clamp(base * rd, -0.20, 0.20);
+  const base = (0.08 / tier) * catchupMult(cur);
+  let pct = clamp(base * rd, -0.32, 0.32);
   const abs1 = cur * pct;
   if (Math.abs(abs1) > 20_000_000) pct = (20_000_000 * Math.sign(abs1)) / cur;
 
@@ -189,10 +237,13 @@ export function getSessionChangePct(cur, rd, rating) {
 // Wartość liczona z listy meczów (posortowanej chronologicznie) + opinii + zdarzeń sezonowych
 // seasonEvents: [{ date, type:"divide3" }, { date, type:"bonus", amount }] — stosowane chronologicznie
 // razem z meczami (po dacie), niezależnie od wyniku meczów z tego samego dnia.
-export function calcValueFrom(base, matches, opinions, seasonEvents) {
+// playerId: używany jako część seeda dla deterministycznych "losowych" zdarzeń (viral moment) —
+// bez niego dwóch graczy z identycznym przebiegiem meczu losowałoby to samo, co jest nierealistyczne.
+export function calcValueFrom(base, matches, opinions, seasonEvents, playerId) {
   const ms = [...(matches || [])].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const ops = opinions || [];
   const evs = [...(seasonEvents || [])].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const pid = playerId || "p";
 
   // Łączymy mecze i zdarzenia sezonowe w jeden chronologiczny ciąg kroków.
   // Przy tej samej dacie zdarzenie sezonowe (np. ÷3 po sezonie) liczy się PRZED meczem tego dnia.
@@ -203,13 +254,35 @@ export function calcValueFrom(base, matches, opinions, seasonEvents) {
 
   if (!steps.length && !ops.length) return Math.min(base, MAX_VALUE);
   let cur = Math.min(base, MAX_VALUE);
+  const milestonesHit = new Set(); // unikamy wielokrotnego naliczenia tego samego progu w jednym przebiegu
 
   steps.forEach(s => {
     if (s.kind === "match") {
       const r = safeR(s.m);
       const rd = r - BASE_RATING;
       const pct = getSessionChangePct(cur, rd, r);
+      const before = cur;
       cur = clamp(cur + Math.round(cur * pct), 100_000, MAX_VALUE);
+
+      // ── VIRAL MOMENT: losowa (ale deterministyczna) szansa na jednorazowy bonus po dobrym meczu ──
+      if (r >= VIRAL_MIN_RATING && cur < MAX_VALUE) {
+        const seed = `${pid}|viral|${s.m.id ?? s.date}`;
+        if (seededRand01(seed) < VIRAL_CHANCE) {
+          const bonusPct = VIRAL_BONUS_MIN + seededRand01(seed + "|pct") * (VIRAL_BONUS_MAX - VIRAL_BONUS_MIN);
+          cur = clamp(cur + Math.round(cur * bonusPct), 100_000, MAX_VALUE);
+        }
+      }
+
+      // ── KAMIENIE MILOWE: jednorazowy bonus za najwyższy nowo-osiągnięty próg w TYM kroku ──
+      // (sprawdzane względem wartości po pct+viral; przy przeskoczeniu kilku progów naraz liczy się tylko jeden bonus)
+      const reachedNow = MILESTONES.filter(ms_ => before < ms_ && cur >= ms_ && !milestonesHit.has(ms_));
+      if (reachedNow.length) {
+        const top = reachedNow[reachedNow.length - 1];
+        reachedNow.forEach(ms_ => milestonesHit.add(ms_));
+        const seed = `${pid}|milestone|${top}`;
+        const bonus = MILESTONE_BONUS_MIN + seededRand01(seed) * (MILESTONE_BONUS_MAX - MILESTONE_BONUS_MIN);
+        cur = clamp(cur + Math.round(bonus), 100_000, MAX_VALUE);
+      }
     } else if (s.kind === "event") {
       if (s.e.type === "divide3") cur = Math.max(Math.round(cur / 3), 100_000);
       else if (s.e.type === "bonus") cur = clamp(cur + Math.round(s.e.amount || 0), 100_000, MAX_VALUE);
@@ -226,7 +299,7 @@ export function calcValueFrom(base, matches, opinions, seasonEvents) {
   return clamp(Math.round(cur * (1 + clamp(op, -0.10, 0.10))), 100_000, MAX_VALUE);
 }
 export function calcValue(player) {
-  return calcValueFrom(player.value, player.matches || [], player.opinions || [], player.seasonEvents || []);
+  return calcValueFrom(player.value, player.matches || [], player.opinions || [], player.seasonEvents || [], player.id);
 }
 // Wartość zawodnika na dany dzień (cutoff = YYYY-MM-DD; null = przed projektem → wartość bazowa)
 export function valueAtDate(player, cutoffStr) {
@@ -234,7 +307,7 @@ export function valueAtDate(player, cutoffStr) {
   const ms = (player.matches || []).filter(m => (m.date || "") <= cutoffStr);
   const ops = (player.opinions || []).filter(o => !o.date || o.date <= cutoffStr);
   const evs = (player.seasonEvents || []).filter(e => (e.date || "") <= cutoffStr);
-  return calcValueFrom(player.value, ms, ops, evs);
+  return calcValueFrom(player.value, ms, ops, evs, player.id);
 }
 // Jak wyżej, ale pomija zdarzenia rollover (÷3 / premie) NALEŻĄCE do danego sezonu.
 // Używane przy liczeniu nagród sezonu X: jego własny rollover (naliczany PO sezonie) nie powinien
@@ -244,7 +317,52 @@ export function valueAtDateExSeasonRollover(player, cutoffStr, excludeSeasonIdx)
   const ms = (player.matches || []).filter(m => (m.date || "") <= cutoffStr);
   const ops = (player.opinions || []).filter(o => !o.date || o.date <= cutoffStr);
   const evs = (player.seasonEvents || []).filter(e => (e.date || "") <= cutoffStr && e.seasonIdx !== excludeSeasonIdx);
-  return calcValueFrom(player.value, ms, ops, evs);
+  return calcValueFrom(player.value, ms, ops, evs, player.id);
+}
+
+// Przebieg wartości mecz-po-meczu, spójny z calcValueFrom (uwzględnia viral moment i kamienie milowe).
+// Zwraca listę meczów wzbogaconą o {rating, valDelta, valPct, viral, milestone} — do wyświetlenia w historii zawodnika.
+// UWAGA: to NIE uwzględnia efektów post-pętli (bonus formy, momentum ostatnich 3 meczów, opinie) —
+// te liczone są raz na końcu calcValue(), nie per-mecz, więc suma delt stąd może się nieznacznie różnić od calcValue(p).
+export function matchByMatchWalk(player) {
+  const ms = [...(player.matches || [])].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  const pid = player.id || "p";
+  let cur = Math.min(player.value, MAX_VALUE);
+  const milestonesHit = new Set();
+  return ms.map(m => {
+    const r = safeR(m);
+    const rd = r - BASE_RATING;
+    const pct = getSessionChangePct(cur, rd, r);
+    const before = cur;
+    cur = clamp(cur + Math.round(cur * pct), 100_000, MAX_VALUE);
+
+    let viral = false, milestone = null;
+    if (r >= VIRAL_MIN_RATING && cur < MAX_VALUE) {
+      const seed = `${pid}|viral|${m.id ?? m.date}`;
+      if (seededRand01(seed) < VIRAL_CHANCE) {
+        const bonusPct = VIRAL_BONUS_MIN + seededRand01(seed + "|pct") * (VIRAL_BONUS_MAX - VIRAL_BONUS_MIN);
+        cur = clamp(cur + Math.round(cur * bonusPct), 100_000, MAX_VALUE);
+        viral = true;
+      }
+    }
+
+    // Kamień milowy: liczymy WZGLĘDEM wartości po pct+viral (nie re-sprawdzamy po dodaniu samego bonusu,
+    // żeby uniknąć kaskady "bonus odblokowuje kolejny bonus odblokowuje kolejny..."). Jeśli w tym kroku
+    // przekroczono kilka progów naraz, liczy się tylko NAJWYŻSZY z nich — jeden bonus na mecz.
+    const reachedNow = MILESTONES.filter(ms_ => before < ms_ && cur >= ms_ && !milestonesHit.has(ms_));
+    if (reachedNow.length) {
+      const top = reachedNow[reachedNow.length - 1];
+      reachedNow.forEach(ms_ => milestonesHit.add(ms_)); // przeskoczone niższe progi też liczymy jako "zdobyte", bez osobnych bonusów
+      const seed = `${pid}|milestone|${top}`;
+      const bonus = MILESTONE_BONUS_MIN + seededRand01(seed) * (MILESTONE_BONUS_MAX - MILESTONE_BONUS_MIN);
+      cur = clamp(cur + Math.round(bonus), 100_000, MAX_VALUE);
+      milestone = top;
+    }
+
+    const delta = cur - before;
+    const ps = before > 0 ? ((delta / before) * 100).toFixed(1) : "0";
+    return { ...m, rating: r, valDelta: delta, valPct: ps, viral, milestone };
+  });
 }
 
 export function getTrend(matches) {
@@ -523,7 +641,7 @@ export function valueSeries(player) {
     const opsUpTo = ops.filter(o => !o.date || o.date <= s.date);
     out.push({
       x: idx + 1,
-      y: calcValueFrom(player.value, msUpTo, opsUpTo, evsUpTo),
+      y: calcValueFrom(player.value, msUpTo, opsUpTo, evsUpTo, player.id),
       date: s.date, season: seasonIndexOf(s.date),
       isEvent: s.kind === "event", eventLabel: s.label,
     });
