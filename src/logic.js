@@ -30,6 +30,12 @@ export const isRandomId = (id) => RANDOM_PLAYERS.some(r => r.id === id);
 
 export const BASE_RATING = 6.7;
 
+// ─── LIMIT WARTOŚCI RYNKOWEJ ──────────────────────────────────────────────────
+export const MAX_VALUE = 400_000_000;          // twardy sufit wartości rynkowej
+export const TOP_TIER_FLOOR = 380_000_000;     // od tego progu obowiązuje zaostrzony reżim spadków
+export const TOP_TIER_MIN_RATING = 9.0;        // ocena wymagana, by NIE tracić na wartości blisko limitu
+export const TOP_TIER_DROP_MULT = 4;           // mnożnik spadku wartości poniżej wymaganej oceny
+
 export const DEFAULT_CRITERIA = [
   { id:"goal",             label:"⚽ Gol",               desc:"Trafił do siatki",                      points:0.40,  cat:"pos" },
   { id:"assist",           label:"🎯 Asysta",             desc:"Podał bezpośrednio na gola",            points:0.30,  cat:"pos" },
@@ -160,44 +166,85 @@ export function checkFormBonus(player) {
   else                { const r = recentN(3); return r.length===3 && r.every(m => contrib(m)>=3 || safeR(m)>9.2); }
 }
 
-export function getSessionChangePct(cur, rd) {
+// rating = ocena z danego meczu (potrzebna do sprawdzenia progu utrzymania blisko limitu €400M)
+export function getSessionChangePct(cur, rd, rating) {
   const tier = Math.log10(Math.max(cur, 100_000) / 300_000 + 1);
   const base = 0.08 / tier;
-  const pct = clamp(base * rd, -0.20, 0.20);
-  const abs = cur * pct;
-  if (Math.abs(abs) > 20_000_000) return (20_000_000 * Math.sign(abs)) / cur;
+  let pct = clamp(base * rd, -0.20, 0.20);
+  const abs1 = cur * pct;
+  if (Math.abs(abs1) > 20_000_000) pct = (20_000_000 * Math.sign(abs1)) / cur;
+
+  // Blisko/na limicie €400M: utrzymanie wymaga oceny ≥9.0 w KAŻDYM meczu.
+  // Poniżej tego progu spadek wartości jest liczony z mnożnikiem x4.
+  if (cur >= TOP_TIER_FLOOR && typeof rating === "number" && rating < TOP_TIER_MIN_RATING) {
+    const penaltyRd = Math.min(rd, rating - TOP_TIER_MIN_RATING); // ujemna różnica do progu
+    let toughPct = clamp((base * penaltyRd) * TOP_TIER_DROP_MULT, -0.60, 0);
+    const abs2 = cur * toughPct;
+    if (Math.abs(abs2) > 20_000_000 * TOP_TIER_DROP_MULT) toughPct = (-20_000_000 * TOP_TIER_DROP_MULT) / cur;
+    pct = Math.min(pct, toughPct);
+  }
   return pct;
 }
 
-// Wartość liczona z listy meczów (posortowanej chronologicznie) + opinii
-export function calcValueFrom(base, matches, opinions) {
+// Wartość liczona z listy meczów (posortowanej chronologicznie) + opinii + zdarzeń sezonowych
+// seasonEvents: [{ date, type:"divide3" }, { date, type:"bonus", amount }] — stosowane chronologicznie
+// razem z meczami (po dacie), niezależnie od wyniku meczów z tego samego dnia.
+export function calcValueFrom(base, matches, opinions, seasonEvents) {
   const ms = [...(matches || [])].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const ops = opinions || [];
-  if (!ms.length && !ops.length) return base;
-  let cur = base;
-  ms.forEach(m => {
-    const rd = safeR(m) - BASE_RATING;
-    const pct = getSessionChangePct(cur, rd);
-    cur = Math.max(cur + Math.round(cur * pct), 100_000);
+  const evs = [...(seasonEvents || [])].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+
+  // Łączymy mecze i zdarzenia sezonowe w jeden chronologiczny ciąg kroków.
+  // Przy tej samej dacie zdarzenie sezonowe (np. ÷3 po sezonie) liczy się PRZED meczem tego dnia.
+  const steps = [
+    ...ms.map(m => ({ kind: "match", date: m.date || "", m })),
+    ...evs.map(e => ({ kind: "event", date: e.date || "", e })),
+  ].sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.kind === b.kind ? 0 : (a.kind === "event" ? -1 : 1)));
+
+  if (!steps.length && !ops.length) return Math.min(base, MAX_VALUE);
+  let cur = Math.min(base, MAX_VALUE);
+
+  steps.forEach(s => {
+    if (s.kind === "match") {
+      const r = safeR(s.m);
+      const rd = r - BASE_RATING;
+      const pct = getSessionChangePct(cur, rd, r);
+      cur = clamp(cur + Math.round(cur * pct), 100_000, MAX_VALUE);
+    } else if (s.kind === "event") {
+      if (s.e.type === "divide3") cur = Math.max(Math.round(cur / 3), 100_000);
+      else if (s.e.type === "bonus") cur = clamp(cur + Math.round(s.e.amount || 0), 100_000, MAX_VALUE);
+    }
   });
-  if (checkFormBonus({ matches: ms, value: base })) cur = Math.round(cur * 1.30);
+
+  if (checkFormBonus({ matches: ms, value: base })) cur = Math.min(Math.round(cur * 1.30), MAX_VALUE);
   const rec = ms.slice(-3);
   if (rec.length) {
     const ra = rec.reduce((s, m) => s + safeR(m), 0) / rec.length;
-    cur = Math.max(Math.round(cur * (1 + clamp((ra - BASE_RATING) * 0.005, -0.02, 0.02))), 100_000);
+    cur = clamp(Math.round(cur * (1 + clamp((ra - BASE_RATING) * 0.005, -0.02, 0.02))), 100_000, MAX_VALUE);
   }
   let op = 0; ops.forEach(o => { if (o.sentiment === "positive") op += 0.02; if (o.sentiment === "negative") op -= 0.02; });
-  return Math.max(Math.round(cur * (1 + clamp(op, -0.10, 0.10))), 100_000);
+  return clamp(Math.round(cur * (1 + clamp(op, -0.10, 0.10))), 100_000, MAX_VALUE);
 }
 export function calcValue(player) {
-  return calcValueFrom(player.value, player.matches || [], player.opinions || []);
+  return calcValueFrom(player.value, player.matches || [], player.opinions || [], player.seasonEvents || []);
 }
 // Wartość zawodnika na dany dzień (cutoff = YYYY-MM-DD; null = przed projektem → wartość bazowa)
 export function valueAtDate(player, cutoffStr) {
   if (!cutoffStr) return player.value;
   const ms = (player.matches || []).filter(m => (m.date || "") <= cutoffStr);
   const ops = (player.opinions || []).filter(o => !o.date || o.date <= cutoffStr);
-  return calcValueFrom(player.value, ms, ops);
+  const evs = (player.seasonEvents || []).filter(e => (e.date || "") <= cutoffStr);
+  return calcValueFrom(player.value, ms, ops, evs);
+}
+// Jak wyżej, ale pomija zdarzenia rollover (÷3 / premie) NALEŻĄCE do danego sezonu.
+// Używane przy liczeniu nagród sezonu X: jego własny rollover (naliczany PO sezonie) nie powinien
+// zniekształcać wartości "na koniec sezonu X" ani być wliczony do "wzrostu wartości w sezonie X".
+export function valueAtDateExSeasonRollover(player, cutoffStr, excludeSeasonIdx) {
+  if (!cutoffStr) return player.value;
+  const ms = (player.matches || []).filter(m => (m.date || "") <= cutoffStr);
+  const ops = (player.opinions || []).filter(o => !o.date || o.date <= cutoffStr);
+  const evs = (player.seasonEvents || []).filter(e => (e.date || "") <= cutoffStr && e.seasonIdx !== excludeSeasonIdx);
+  return calcValueFrom(player.value, ms, ops, evs);
 }
 
 export function getTrend(matches) {
@@ -315,8 +362,8 @@ export function computeSeasonAwards(season, players) {
 
   const startCut = season.start ? addDaysStr(season.start, -1) : null;
   const endCut = season.end;
-  const growthOf = (p) => valueAtDate(p, endCut) - valueAtDate(p, startCut);
-  const valEndOf = (p) => valueAtDate(p, endCut);
+  const growthOf = (p) => valueAtDateExSeasonRollover(p, endCut, idx) - valueAtDate(p, startCut);
+  const valEndOf = (p) => valueAtDateExSeasonRollover(p, endCut, idx);
 
   const ranks = {
     scorers: real.map(p => ({ p, n: stat[p.id].goals })).filter(x => x.n > 0).sort((a, b) => b.n - a.n),
@@ -374,6 +421,55 @@ export function computeSeasonAwards(season, players) {
   return { potm, potmWins, played: played.length, scorer, assist, banger, mvp, growth, topValue, ranks, matchOfSeason, matchQuality: best, stat, win };
 }
 
+// ─── ROLLOVER SEZONU (÷3 wartości + premie za nagrody) ────────────────────────
+// Premie pieniężne za wygranie poszczególnych nagród sezonowych.
+export const SEASON_BONUSES = {
+  scorer: 10_000_000,   // Król strzelców
+  assist: 12_000_000,   // Król asyst
+  banger: 7_000_000,    // Król bengerów
+  growth: 15_000_000,   // Największy wzrost wartości
+  potm:   40_000_000,   // Piłkarz sezonu (zawsze dokładnie jeden zwycięzca)
+};
+
+// Sprawdza, czy dany (zakończony) sezon ma już naliczony rollover u któregokolwiek realnego zawodnika.
+function seasonHasRollover(players, seasonIdx) {
+  return players.some(p => !p.random && (p.seasonEvents || []).some(e => e.seasonIdx === seasonIdx && e.type === "divide3"));
+}
+
+// Nalicza ÷3 wartości + premie za nagrody dla WSZYSTKICH zakończonych sezonów,
+// które jeszcze nie zostały przetworzone. Idempotentne — bezpieczne wywoływać przy każdym starcie aplikacji.
+// Zwraca NOWĄ listę zawodników (lub tę samą referencję, jeśli nic nie trzeba było naliczyć).
+export function applySeasonRolloverIfNeeded(players) {
+  const seasons = buildSeasons(players).filter(s => s.completed);
+  const pending = seasons.filter(s => !seasonHasRollover(players, s.index));
+  if (!pending.length) return players;
+
+  let cur = players;
+  pending.forEach(season => {
+    const divideDate = addDaysStr(season.end, 1);   // dzień po końcu sezonu: ÷3 dla wszystkich
+    const bonusDate  = addDaysStr(season.end, 2);   // kolejny dzień: premie za nagrody (gwarantowana kolejność po ÷3)
+    const awards = computeSeasonAwards(season, cur);
+
+    const bonusByPlayer = {}; // id -> suma premii (mln) za ten sezon
+    const addBonus = (p, amount) => { bonusByPlayer[p.id] = (bonusByPlayer[p.id] || 0) + amount; };
+    awards.scorer.winners.forEach(p => addBonus(p, SEASON_BONUSES.scorer));
+    awards.assist.winners.forEach(p => addBonus(p, SEASON_BONUSES.assist));
+    awards.banger.winners.forEach(p => addBonus(p, SEASON_BONUSES.banger));
+    awards.growth.winners.forEach(p => addBonus(p, SEASON_BONUSES.growth));
+    if (awards.potm) addBonus(awards.potm, SEASON_BONUSES.potm);
+
+    cur = cur.map(p => {
+      if (p.random) return p; // zawodnicy spoza klasy nie biorą udziału w rollover
+      const events = [...(p.seasonEvents || [])];
+      events.push({ seasonIdx: season.index, date: divideDate, type: "divide3" });
+      const bonus = bonusByPlayer[p.id] || 0;
+      if (bonus > 0) events.push({ seasonIdx: season.index, date: bonusDate, type: "bonus", amount: bonus });
+      return { ...p, seasonEvents: events };
+    });
+  });
+  return cur;
+}
+
 export function getLastCompletedSeasonAwards(players) {
   const seasons = buildSeasons(players);
   const completed = seasons.filter(s => s.completed);
@@ -393,6 +489,7 @@ export function normalizePlayers(loaded) {
       random: isRnd,
       matches: (ex && Array.isArray(ex.matches)) ? ex.matches : [],
       opinions: (ex && Array.isArray(ex.opinions)) ? ex.opinions : [],
+      seasonEvents: (ex && Array.isArray(ex.seasonEvents)) ? ex.seasonEvents : [],
     };
   });
   return [...build(PLAYERS, false), ...build(RANDOM_PLAYERS, true)];
@@ -406,15 +503,30 @@ export const seasonColor = (idx) => SEASON_COLORS[(((idx - 1) % SEASON_COLORS.le
 export function valueSeries(player) {
   const ms = [...(player.matches || [])].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const ops = player.opinions || [];
+  const evs = [...(player.seasonEvents || [])].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const out = [{
-    x: 0, y: player.value,
+    x: 0, y: Math.min(player.value, MAX_VALUE),
     date: ms.length ? ms[0].date : todayStr(),
     season: ms.length ? seasonIndexOf(ms[0].date) : seasonIndexOf(todayStr()),
   }];
-  ms.forEach((m, idx) => {
-    const prefix = ms.slice(0, idx + 1);
-    const opsUpTo = ops.filter(o => !o.date || o.date <= m.date);
-    out.push({ x: idx + 1, y: calcValueFrom(player.value, prefix, opsUpTo), date: m.date, season: seasonIndexOf(m.date) });
+  // Łączymy mecze i zdarzenia sezonowe w jeden chronologiczny ciąg kroków,
+  // żeby wykres pokazał zarówno zmiany po meczach, jak i skoki po ÷3 / premiach sezonowych.
+  const steps = [
+    ...ms.map(m => ({ kind: "match", date: m.date || "", m })),
+    ...evs.map(e => ({ kind: "event", date: e.date || "", e, label: e.type === "divide3" ? "÷3 po sezonie" : "Premia sezonowa" })),
+  ].sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.kind === b.kind ? 0 : (a.kind === "event" ? -1 : 1)));
+
+  steps.forEach((s, idx) => {
+    const prefix = steps.slice(0, idx + 1);
+    const msUpTo = prefix.filter(x => x.kind === "match").map(x => x.m);
+    const evsUpTo = prefix.filter(x => x.kind === "event").map(x => x.e);
+    const opsUpTo = ops.filter(o => !o.date || o.date <= s.date);
+    out.push({
+      x: idx + 1,
+      y: calcValueFrom(player.value, msUpTo, opsUpTo, evsUpTo),
+      date: s.date, season: seasonIndexOf(s.date),
+      isEvent: s.kind === "event", eventLabel: s.label,
+    });
   });
   return out;
 }

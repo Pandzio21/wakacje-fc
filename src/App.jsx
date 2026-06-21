@@ -10,6 +10,8 @@ import {
   seasonIndexOf, seasonRange, matchKeyOf, getMatches, buildSeasons,
   computeSeasonAwards, getLastCompletedSeasonAwards, normalizePlayers,
   SEASON_COLORS, seasonColor, valueSeries, metricSeries,
+  MAX_VALUE, TOP_TIER_FLOOR, TOP_TIER_MIN_RATING,
+  applySeasonRolloverIfNeeded, SEASON_BONUSES,
 } from "./logic.js";
 
 // ─── WSPÓLNE STYLE ────────────────────────────────────────────────────────────
@@ -248,7 +250,7 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
       const pr = calcMatchRating(pc, criteria);
       const curPl = players.find(x => x.id===activeP) || { value:0, matches:[], opinions:[] };
       const curV = calcValue(curPl);
-      const chg = Math.round(curV * getSessionChangePct(curV, pr-BASE_RATING));
+      const chg = Math.round(curV * getSessionChangePct(curV, pr-BASE_RATING, pr));
       return (
         <div style={{ marginTop:16 }}>
           <button onClick={() => W({ activeP:null })} style={{ background:"none", border:"none", color:"#ff6b35", cursor:"pointer", fontSize:13, marginBottom:12, padding:0 }}>← Wróć do składu</button>
@@ -297,6 +299,11 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
                   : <div style={{ fontSize:16, fontWeight:800, color:chg>=0?"#22c55e":"#ef4444" }}>{chg>=0?"+":""}{fv(Math.abs(chg))}</div>}
               </div>
             </div>
+            {!rnd && curV>=TOP_TIER_FLOOR && pr<TOP_TIER_MIN_RATING && (
+              <div style={{ background:"rgba(239,68,68,.12)", border:"1px solid #ef4444", borderRadius:8, padding:"8px 12px", marginTop:-8, marginBottom:14, fontSize:11, color:"#fca5a5" }}>
+                ⚠️ {p?.name} jest blisko limitu {fv(MAX_VALUE)} — przy ocenie poniżej {TOP_TIER_MIN_RATING.toFixed(1)} wartość spada x4 szybciej.
+              </div>
+            )}
             <button onClick={() => W({ activeP:null })} style={{ width:"100%", padding:"11px", background:"#ff6b35", border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>💾 Zapisz i wróć</button>
           </div>
         </div>
@@ -660,6 +667,7 @@ function SeasonCard({ season, players, criteria, defaultOpen }) {
   const curIdx = seasonIndexOf(todayStr());
   const live = season.index===curIdx && !season.completed;
   const rangeTxt = season.start ? `${fmtPL(season.start)} – ${fmtPL(season.end)}` : `start projektu – ${fmtPL(season.end)}`;
+  const rolledOver = season.completed && players.some(p => !p.random && (p.seasonEvents||[]).some(e => e.seasonIdx===season.index && e.type==="divide3"));
 
   const miniRank = (rows, fmt, unit) => (
     <div style={{ marginBottom:10 }}>
@@ -684,6 +692,7 @@ function SeasonCard({ season, players, criteria, defaultOpen }) {
             <span style={{ fontSize:15, fontWeight:900, color:"#e2e8f0" }}>Sezon {season.index}</span>
             {live && <span style={{ fontSize:9, fontWeight:800, color:"#fff", background:"#ef4444", borderRadius:4, padding:"2px 6px" }}>● NA ŻYWO</span>}
             {!live && season.completed && <span style={{ fontSize:9, fontWeight:700, color:"#475569", border:"1px solid #3b1f5c", borderRadius:4, padding:"2px 6px" }}>zakończony</span>}
+            {rolledOver && <span title="Wartości zostały podzielone przez 3, a premie za nagrody naliczone" style={{ fontSize:9, fontWeight:700, color:"#22c55e", border:"1px solid #166534", borderRadius:4, padding:"2px 6px" }}>✓ rozliczony (÷3 + premie)</span>}
           </div>
           <div style={{ fontSize:11, color:"#64748b", marginTop:2 }}>{rangeTxt} · {season.matches.length} {season.matches.length===1?"mecz":"meczów"}</div>
         </div>
@@ -692,7 +701,7 @@ function SeasonCard({ season, players, criteria, defaultOpen }) {
 
       {/* Piłkarz sezonu */}
       <div style={{ marginTop:12, background:"linear-gradient(135deg,rgba(255,107,53,.12),rgba(224,40,157,.08))", border:"1px solid #7c2d12", borderRadius:10, padding:"12px 14px" }}>
-        <div style={{ fontSize:10, color:"#ffb088", letterSpacing:.5, marginBottom:2 }}>👑 PIŁKARZ SEZONU {live?"(prowizorycznie)":""}</div>
+        <div style={{ fontSize:10, color:"#ffb088", letterSpacing:.5, marginBottom:2 }}>👑 PIŁKARZ SEZONU {live?"(prowizorycznie)":""} <span style={{ color:"#22c55e", fontWeight:700 }}>· +{fv(SEASON_BONUSES.potm)}</span></div>
         {a.potm
           ? <div style={{ fontSize:18, fontWeight:900, color:"#fff" }}>{a.potm.name} <span style={{ fontSize:12, fontWeight:600, color:"#c9a8e0" }}>· {a.potmWins} {a.potmWins===1?"kategoria":"kategorie"}</span></div>
           : <div style={{ fontSize:14, color:"#94a3b8" }}>— jeszcze nikt nie zagrał —</div>}
@@ -700,13 +709,19 @@ function SeasonCard({ season, players, criteria, defaultOpen }) {
 
       {/* Zwycięzcy kategorii */}
       <div style={{ marginTop:12 }}>
-        <AwardLine icon="⚽" label="Król strzelców" players={a.scorer.winners} extra={a.scorer.n>0?`${a.scorer.n} goli`:null} />
-        <AwardLine icon="👟" label="Król asyst" players={a.assist.winners} extra={a.assist.n>0?`${a.assist.n} asyst`:null} />
+        <AwardLine icon="⚽" label={`Król strzelców · +${fv(SEASON_BONUSES.scorer)}`} players={a.scorer.winners} extra={a.scorer.n>0?`${a.scorer.n} goli`:null} />
+        <AwardLine icon="👟" label={`Król asyst · +${fv(SEASON_BONUSES.assist)}`} players={a.assist.winners} extra={a.assist.n>0?`${a.assist.n} asyst`:null} />
         <AwardLine icon="🐐" label="Król średniej (MVP)" players={a.mvp.winners} extra={a.mvp.avg!=null?`śr. ${a.mvp.avg.toFixed(2)}`:null} />
-        <AwardLine icon="🚀" label="Król bengerów" players={a.banger.winners} extra={a.banger.n>0?`${a.banger.n} szt.`:null} />
-        <AwardLine icon="⬆️" label="Największy wzrost wartości" players={a.growth.winners} extra={a.growth.g!=null&&a.growth.g>0?`+${fv(a.growth.g)}`:null} />
+        <AwardLine icon="🚀" label={`Król bengerów · +${fv(SEASON_BONUSES.banger)}`} players={a.banger.winners} extra={a.banger.n>0?`${a.banger.n} szt.`:null} />
+        <AwardLine icon="⬆️" label={`Największy wzrost wartości · +${fv(SEASON_BONUSES.growth)}`} players={a.growth.winners} extra={a.growth.g!=null&&a.growth.g>0?`+${fv(a.growth.g)}`:null} />
         <AwardLine icon="💎" label="Najwyższa wartość na koniec" players={a.topValue.winners} extra={a.topValue.v!=null?fv(a.topValue.v):null} />
       </div>
+
+      {season.completed && !rolledOver && (
+        <div style={{ marginTop:12, fontSize:10, color:"#94a3b8", background:"rgba(148,163,184,.08)", border:"1px solid #334155", borderRadius:8, padding:"8px 10px" }}>
+          ⏳ Sezon zakończony — wartości (÷3) i premie zostaną naliczone automatycznie przy najbliższym wejściu administratora.
+        </div>
+      )}
 
       {/* Mecz sezonu */}
       {a.matchOfSeason && (
@@ -1010,7 +1025,16 @@ function MainApp({ readOnly, onExit }) {
       const res = await fetch("/api/data");
       if (!res.ok) return;
       const data = await res.json();
-      if (data?.players) setPlayers(normalizePlayers(data.players));
+      if (data?.players) {
+        const loaded = normalizePlayers(data.players);
+        const rolled = applySeasonRolloverIfNeeded(loaded);
+        setPlayers(rolled);
+        // Jeśli rollover coś naliczył i jesteśmy adminem, od razu zapisz wynik na serwer,
+        // żeby inni uczestnicy (i kolejne odświeżenia) zobaczyli już przeliczone wartości.
+        if (rolled !== loaded && !readOnly) {
+          saveToStorage(rolled, data.criteria || criteria);
+        }
+      }
       if (data?.criteria) setCriteria(data.criteria);
       if (data?.ts) { lastTs.current = data.ts; setLastSync(new Date(data.ts).toLocaleTimeString("pl-PL")); }
     } catch (e) { /* offline ok */ }
@@ -1184,6 +1208,7 @@ function MainApp({ readOnly, onExit }) {
                         <span>{p.name} <span style={{ fontSize:11, color:"#334155", fontWeight:400 }}>· {p.position}</span></span>
                         {badges.map(([emoji, title], bi) => <span key={bi} title={title} style={{ fontSize:13 }}>{emoji}</span>)}
                         {formBonus && <span style={{ fontSize:9, background:"rgba(251,191,36,.2)", border:"1px solid #fbbf24", color:"#fbbf24", borderRadius:3, padding:"1px 5px" }}>🔥 FORMA +30%</span>}
+                        {val>=TOP_TIER_FLOOR && <span title={`Blisko limitu ${fv(MAX_VALUE)} — wymagana ocena ≥${TOP_TIER_MIN_RATING.toFixed(1)}, inaczej spadek x4`} style={{ fontSize:9, background:"rgba(239,68,68,.18)", border:"1px solid #ef4444", color:"#fca5a5", borderRadius:3, padding:"1px 5px" }}>⚠️ TOP · ≥{TOP_TIER_MIN_RATING.toFixed(1)}</span>}
                       </div>
                       <div style={{ fontSize:11, color:"#334155", marginTop:1 }}>{p.matches.length} meczów · kliknij po wykres</div>
                     </div>
@@ -1418,13 +1443,13 @@ function MainApp({ readOnly, onExit }) {
           const p = players.find(x => x.id===selP); if (!p) return null;
           const avg = getAvgRating(p.matches), val = calcValue(p), chg = val-p.value, form = checkFormBonus(p);
           const badges = badgesFor(p.id, lca);
-          let running = p.value;
+          let running = Math.min(p.value, MAX_VALUE);
           const mwv = (p.matches||[]).map(m => {
             const r = safeR(m);
-            const pct = getSessionChangePct(running, r-BASE_RATING);
-            const delta = Math.round(running*pct);
+            const pct = getSessionChangePct(running, r-BASE_RATING, r);
+            const delta = Math.min(Math.round(running*pct), MAX_VALUE-running);
             const ps = running>0 ? ((delta/running)*100).toFixed(1) : "0";
-            running = Math.max(running+delta, 100_000);
+            running = Math.min(Math.max(running+delta, 100_000), MAX_VALUE);
             return { ...m, rating:r, valDelta:delta, valPct:ps };
           });
           return (
@@ -1438,6 +1463,7 @@ function MainApp({ readOnly, onExit }) {
                     </div>
                     <div style={{ fontSize:12, color:"#475569" }}>{p.position} · {p.matches.length} meczów</div>
                     {form && <div style={{ fontSize:10, background:"rgba(251,191,36,.15)", border:"1px solid #fbbf24", color:"#fbbf24", borderRadius:4, padding:"2px 7px", marginTop:5, display:"inline-block" }}>🔥 FORMA AKTYWNA · +30% wartość</div>}
+                    {val>=TOP_TIER_FLOOR && <div style={{ fontSize:10, background:"rgba(239,68,68,.15)", border:"1px solid #ef4444", color:"#fca5a5", borderRadius:4, padding:"2px 7px", marginTop:5, display:"inline-block" }}>⚠️ Blisko limitu {fv(MAX_VALUE)} · wymagana ocena ≥{TOP_TIER_MIN_RATING.toFixed(1)}, inaczej spadek x4</div>}
                     <div style={{ display:"flex", gap:8, marginTop:8 }}>
                       {[["Wygrana","#22c55e","W"],["Remis","#f59e0b","R"],["Przegrana","#ef4444","P"]].map(([res,col,ico]) => { const cnt = p.matches.filter(m => m.result===res).length; return cnt ? <span key={res} style={{ fontSize:11, fontWeight:700, color:col }}>{ico} {cnt}</span> : null; })}
                     </div>
