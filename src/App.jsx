@@ -10,16 +10,16 @@ import {
   seasonIndexOf, seasonRange, matchKeyOf, getMatches, buildSeasons,
   computeSeasonAwards, getLastCompletedSeasonAwards, normalizePlayers,
   SEASON_COLORS, seasonColor, valueSeries, metricSeries,
-  MAX_VALUE, TOP_TIER_FLOOR, TOP_TIER_MIN_RATING,
+  MAX_VALUE, TOP_TIER_FLOOR, TOP_TIER_MIN_RATING, TOP_TIER_DROP_MULT,
   applySeasonRolloverIfNeeded, SEASON_BONUSES,
-  matchByMatchWalk, MILESTONES, VIRAL_MIN_RATING, CATCHUP_FLOOR, CATCHUP_CEIL,
+  matchByMatchWalk, VIRAL_MIN_RATING, CATCHUP_FLOOR, CATCHUP_CEIL, MAX_GAIN_PER_MATCH,
 } from "./logic.js";
 
-// ─── WSPÓLNE STYLE ────────────────────────────────────────────────────────────
-const BG = "radial-gradient(ellipse at top,#1a0f2e 0%,#0c0a1d 60%)";
-const CARD = { background:"#150d2e", border:"1px solid #221640", borderRadius:12, padding:18, marginBottom:14 };
-const LABEL = { fontSize:11, color:"#334155", marginBottom:14, letterSpacing:.5 };
-const INP = { background:"#221640", border:"1px solid #3b1f5c", borderRadius:6, color:"#e2e8f0", padding:"7px 10px", fontSize:13, width:"100%", boxSizing:"border-box" };
+// ─── WSPÓLNE STYLE — „Piękni i Młodzi FC" (motyw EA FC 25: zielono-czarny) ─────
+const BG = "radial-gradient(ellipse at top,#10221a 0%,#070a08 60%)";
+const CARD = { background:"#0f1612", border:"1px solid #1c2820", borderRadius:12, padding:18, marginBottom:14 };
+const LABEL = { fontSize:11, color:"#4a6b56", marginBottom:14, letterSpacing:.5 };
+const INP = { background:"#16201a", border:"1px solid #2a3d2f", borderRadius:6, color:"#e7f5ec", padding:"7px 10px", fontSize:13, width:"100%", boxSizing:"border-box" };
 const nameOf = (id) => { const p = ALL_PLAYERS.find(x => x.id === id); return p ? p.name : "?"; };
 
 const EMPTY_WIZ = () => ({
@@ -35,14 +35,14 @@ function StepBar({ step }) {
     <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:6, marginBottom:20 }}>
       {[["1","Skład"],["2","Gole"],["3","Oceny"],["4","Gotowe"]].map(([s,lbl],i) => (
         <div key={s} style={{ display:"flex", alignItems:"center", gap:6 }}>
-          {i>0 && <div style={{ width:16, height:2, background: parseInt(step)>i ? "#ff6b35" : "#3b1f5c" }} />}
+          {i>0 && <div style={{ width:16, height:2, background: parseInt(step)>i ? "#00ff85" : "#2a3d2f" }} />}
           <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:2 }}>
             <div style={{ width:26, height:26, borderRadius:"50%", display:"flex", alignItems:"center", justifyContent:"center", fontSize:12, fontWeight:800,
-              background: step===s ? "#ff6b35" : parseInt(step)>parseInt(s) ? "#7c2d12" : "#3b1f5c",
-              color: step===s ? "#fff" : parseInt(step)>parseInt(s) ? "#ffb088" : "#475569" }}>
+              background: step===s ? "#00ff85" : parseInt(step)>parseInt(s) ? "#15803d" : "#2a3d2f",
+              color: step===s ? "#fff" : parseInt(step)>parseInt(s) ? "#7dffb8" : "#475569" }}>
               {parseInt(step)>parseInt(s) ? "✓" : s}
             </div>
-            <div style={{ fontSize:9, color: step===s ? "#ffb088" : "#475569" }}>{lbl}</div>
+            <div style={{ fontSize:9, color: step===s ? "#7dffb8" : "#475569" }}>{lbl}</div>
           </div>
         </div>
       ))}
@@ -57,14 +57,14 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
   const W = (upd) => setWiz(w => ({ ...w, ...upd }));
   const scoreA = goals.filter(g => g.teamSide==="A").length;
   const scoreB = goals.filter(g => g.teamSide==="B").length;
-  const inp = { width:"100%", background:"#221640", border:"1px solid #3b1f5c", borderRadius:6, color:"#e2e8f0", padding:"8px 10px", fontSize:13, boxSizing:"border-box" };
+  const inp = { width:"100%", background:"#1c2820", border:"1px solid #2a3d2f", borderRadius:6, color:"#e2e8f0", padding:"8px 10px", fontSize:13, boxSizing:"border-box" };
   const lbl = { fontSize:12, color:"#64748b", display:"block", marginBottom:4 };
 
   const PlayerPick = ({ p, ids, other, setIds, ac, ab }) => {
     const inThis = ids.includes(p.id), inOther = other.includes(p.id);
     return (
       <button onClick={() => { if (inOther) return; setIds(inThis ? ids.filter(x => x!==p.id) : [...ids, p.id]); }}
-        style={{ padding:"6px 10px", borderRadius:6, border:`1px solid ${inThis?ac:"#3b1f5c"}`, textAlign:"left", cursor: inOther?"not-allowed":"pointer", fontSize:12, fontWeight:600,
+        style={{ padding:"6px 10px", borderRadius:6, border:`1px solid ${inThis?ac:"#2a3d2f"}`, textAlign:"left", cursor: inOther?"not-allowed":"pointer", fontSize:12, fontWeight:600,
           background: inThis?ab:"transparent", color: inThis?ac:inOther?"#334155":"#64748b", opacity: inOther?0.4:1 }}>
         {inThis ? "✓ " : ""}{p.name} <span style={{ fontWeight:400, opacity:.6 }}>· {p.position}</span>
       </button>
@@ -75,18 +75,18 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
   if (step==="1") return (
     <div style={{ marginTop:16 }}>
       {isEdit && (
-        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", background:"rgba(255,107,53,.12)", border:"1px solid #ff6b35", borderRadius:8, padding:"8px 12px", marginBottom:12 }}>
-          <span style={{ fontSize:12, fontWeight:700, color:"#ffb088" }}>✏️ Edytujesz istniejący mecz</span>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", background:"rgba(0,255,133,.12)", border:"1px solid #00ff85", borderRadius:8, padding:"8px 12px", marginBottom:12 }}>
+          <span style={{ fontSize:12, fontWeight:700, color:"#7dffb8" }}>✏️ Edytujesz istniejący mecz</span>
         </div>
       )}
       <p style={{ fontSize:12, color:"#64748b", margin:"0 0 16px" }}>Wybierz datę, nazwij drużyny i dodaj zawodników. Zawodnicy „spoza klasy" są oceniani, ale nie liczą się do rankingu ani statystyk sezonu.</p>
-      <div style={{ background:"#221640", border:"1px solid #3b1f5c", borderRadius:12, padding:20 }}>
+      <div style={{ background:"#1c2820", border:"1px solid #2a3d2f", borderRadius:12, padding:20 }}>
         <StepBar step={step} />
         <label style={lbl}>Data meczu</label>
         <input type="date" value={date} onChange={e => W({ date:e.target.value })} style={{ ...inp, marginBottom:16 }} />
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
           {[
-            { side:"A", name:teamAName, setName:v=>W({teamAName:v}), ids:teamA, other:teamB, setIds:v=>W({teamA:v}), ac:"#ff6b35", ab:"rgba(255,107,53,.15)", ph:"Team Huxa" },
+            { side:"A", name:teamAName, setName:v=>W({teamAName:v}), ids:teamA, other:teamB, setIds:v=>W({teamA:v}), ac:"#00ff85", ab:"rgba(0,255,133,.15)", ph:"Team Huxa" },
             { side:"B", name:teamBName, setName:v=>W({teamBName:v}), ids:teamB, other:teamA, setIds:v=>W({teamB:v}), ac:"#00d9c0", ab:"rgba(0,217,192,.15)", ph:"Team Śmietanki" },
           ].map(({ side, name, setName, ids, other, setIds, ac, ab, ph }) => (
             <div key={side}>
@@ -103,7 +103,7 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
           ))}
         </div>
         <button onClick={() => { if (teamA.length && teamB.length) W({ step:"2" }); }} disabled={!teamA.length||!teamB.length}
-          style={{ width:"100%", marginTop:16, padding:"11px", background: teamA.length&&teamB.length?"#ff6b35":"#3b1f5c", border:"none", borderRadius:8, color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer" }}>
+          style={{ width:"100%", marginTop:16, padding:"11px", background: teamA.length&&teamB.length?"#00ff85":"#2a3d2f", border:"none", borderRadius:8, color:"#fff", fontSize:14, fontWeight:700, cursor:"pointer" }}>
           Dalej → Gole
         </button>
       </div>
@@ -115,20 +115,20 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
     const add = (side) => W({ goals:[...goals, { id:Date.now()+Math.random(), teamSide:side, scorer:"", assist:"", minute:"", stoppage:"", type:"normal", phase:"1H" }] });
     const upd = (id, u) => W({ goals: goals.map(g => g.id===id ? { ...g, ...u } : g) });
     const rm = (id) => W({ goals: goals.filter(g => g.id!==id) });
-    const sel = { background:"#221640", border:"1px solid #3b1f5c", borderRadius:5, color:"#e2e8f0", padding:"5px 7px", fontSize:12, width:"100%" };
+    const sel = { background:"#1c2820", border:"1px solid #2a3d2f", borderRadius:5, color:"#e2e8f0", padding:"5px 7px", fontSize:12, width:"100%" };
     const tA = teamA.map(id => ALL_PLAYERS.find(p => p.id===id)).filter(Boolean);
     const tB = teamB.map(id => ALL_PLAYERS.find(p => p.id===id)).filter(Boolean);
     return (
       <div style={{ marginTop:16 }}>
-        <div style={{ background:"#221640", border:"1px solid #3b1f5c", borderRadius:12, padding:20 }}>
+        <div style={{ background:"#1c2820", border:"1px solid #2a3d2f", borderRadius:12, padding:20 }}>
           <StepBar step={step} />
-          <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:20, marginBottom:18, padding:"14px", background:"#0c0a1d", borderRadius:10 }}>
-            <div style={{ textAlign:"center" }}><div style={{ fontSize:11, color:"#64748b", marginBottom:2 }}>{teamAName||"A"}</div><div style={{ fontSize:38, fontWeight:900, color:"#ff6b35" }}>{scoreA}</div></div>
+          <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:20, marginBottom:18, padding:"14px", background:"#070a08", borderRadius:10 }}>
+            <div style={{ textAlign:"center" }}><div style={{ fontSize:11, color:"#64748b", marginBottom:2 }}>{teamAName||"A"}</div><div style={{ fontSize:38, fontWeight:900, color:"#00ff85" }}>{scoreA}</div></div>
             <div style={{ fontSize:20, color:"#334155", fontWeight:800 }}>:</div>
             <div style={{ textAlign:"center" }}><div style={{ fontSize:11, color:"#64748b", marginBottom:2 }}>{teamBName||"B"}</div><div style={{ fontSize:38, fontWeight:900, color:"#00d9c0" }}>{scoreB}</div></div>
           </div>
           <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:14 }}>
-            <button onClick={() => add("A")} style={{ padding:"9px", background:"rgba(255,107,53,.15)", border:"1px solid #ff6b35", borderRadius:8, color:"#ffb088", fontSize:13, fontWeight:700, cursor:"pointer" }}>+ Gol {teamAName||"A"}</button>
+            <button onClick={() => add("A")} style={{ padding:"9px", background:"rgba(0,255,133,.15)", border:"1px solid #00ff85", borderRadius:8, color:"#7dffb8", fontSize:13, fontWeight:700, cursor:"pointer" }}>+ Gol {teamAName||"A"}</button>
             <button onClick={() => add("B")} style={{ padding:"9px", background:"rgba(0,217,192,.15)", border:"1px solid #00d9c0", borderRadius:8, color:"#7ef5e5", fontSize:13, fontWeight:700, cursor:"pointer" }}>+ Gol {teamBName||"B"}</button>
           </div>
           {goals.length===0 && <div style={{ fontSize:12, color:"#334155", textAlign:"center", padding:"16px 0", fontStyle:"italic" }}>Brak goli – dodaj powyżej lub przejdź dalej</div>}
@@ -139,15 +139,15 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
             const pool = isOG ? (isA ? tB : tA) : (isA ? tA : tB);
             const noA = g.type==="penalty" || g.type==="noAssist" || isOG;
             return (
-              <div key={g.id} style={{ background:"#0c0a1d", border:`1px solid ${isOG?"#ef4444":(isA?"#ff6b35":"#00d9c0")}33`, borderRadius:10, padding:"12px", marginBottom:8 }}>
+              <div key={g.id} style={{ background:"#070a08", border:`1px solid ${isOG?"#ef4444":(isA?"#00ff85":"#00d9c0")}33`, borderRadius:10, padding:"12px", marginBottom:8 }}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
-                  <div style={{ fontWeight:700, fontSize:12, color:isA?"#ffb088":"#7ef5e5" }}>● Gol {gi+1} · {isA?(teamAName||"A"):(teamBName||"B")}{isOG && <span style={{ color:"#ef4444", marginLeft:5 }}>(samobój)</span>}</div>
+                  <div style={{ fontWeight:700, fontSize:12, color:isA?"#7dffb8":"#7ef5e5" }}>● Gol {gi+1} · {isA?(teamAName||"A"):(teamBName||"B")}{isOG && <span style={{ color:"#ef4444", marginLeft:5 }}>(samobój)</span>}</div>
                   <button onClick={() => rm(g.id)} style={{ background:"none", border:"none", color:"#475569", cursor:"pointer", fontSize:16 }}>✕</button>
                 </div>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:8 }}>
                   <div>
                     <label style={lbl}>{isOG ? `Strzelec (${isA?(teamBName||"B"):(teamAName||"A")} – samobój)` : "Strzelec"}</label>
-                    <select value={g.scorer} onChange={e => upd(g.id,{ scorer:e.target.value })} style={{ ...sel, borderColor:isOG?"#ef4444":"#3b1f5c" }}>
+                    <select value={g.scorer} onChange={e => upd(g.id,{ scorer:e.target.value })} style={{ ...sel, borderColor:isOG?"#ef4444":"#2a3d2f" }}>
                       <option value="">— —</option>
                       {pool.map(p => <option key={p.id} value={p.id}>{p.name}{p.random?" (spoza)":""}</option>)}
                     </select>
@@ -174,7 +174,7 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
                     <div style={{ display:"flex", gap:4 }}>
                       {PHASE_ORDER.map(ph => (
                         <button key={ph} onClick={() => upd(g.id,{ phase:ph })}
-                          style={{ flex:1, padding:"5px 4px", borderRadius:4, border:`1px solid ${g.phase===ph?"#ff6b35":"#3b1f5c"}`, background:g.phase===ph?"rgba(255,107,53,.2)":"transparent", color:g.phase===ph?"#ffb088":"#64748b", fontSize:10, fontWeight:600, cursor:"pointer" }}>
+                          style={{ flex:1, padding:"5px 4px", borderRadius:4, border:`1px solid ${g.phase===ph?"#00ff85":"#2a3d2f"}`, background:g.phase===ph?"rgba(0,255,133,.2)":"transparent", color:g.phase===ph?"#7dffb8":"#64748b", fontSize:10, fontWeight:600, cursor:"pointer" }}>
                           {ph==="1H"?"1. poł":ph==="2H"?"2. poł":"dogr."}
                         </button>
                       ))}
@@ -189,7 +189,7 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
                         upd(g.id,{ type:t.id, assist:(t.id==="penalty"||t.id==="noAssist"||willOG)?"":g.assist, scorer:clearScorer?"":g.scorer });
                       }}
                       style={{ padding:"3px 9px", borderRadius:4, border:"1px solid", fontSize:11, fontWeight:600, cursor:"pointer",
-                        background:g.type===t.id?(t.id==="ownGoal"?"#ef4444":"#ff6b35"):"transparent", borderColor:g.type===t.id?(t.id==="ownGoal"?"#ef4444":"#ff6b35"):"#3b1f5c", color:g.type===t.id?"#fff":"#64748b" }}>
+                        background:g.type===t.id?(t.id==="ownGoal"?"#ef4444":"#00ff85"):"transparent", borderColor:g.type===t.id?(t.id==="ownGoal"?"#ef4444":"#00ff85"):"#2a3d2f", color:g.type===t.id?"#fff":"#64748b" }}>
                       {t.label}
                     </button>
                   ))}
@@ -199,28 +199,28 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
           })}
 
           {/* DOGRYWKA / KARNE */}
-          <div style={{ marginTop:14, paddingTop:14, borderTop:"1px solid #3b1f5c" }}>
-            <div style={{ fontSize:11, fontWeight:700, color:"#c9a8e0", marginBottom:10, letterSpacing:.5 }}>⏱️ DOGRYWKA I KARNE</div>
+          <div style={{ marginTop:14, paddingTop:14, borderTop:"1px solid #2a3d2f" }}>
+            <div style={{ fontSize:11, fontWeight:700, color:"#a8c9b0", marginBottom:10, letterSpacing:.5 }}>⏱️ DOGRYWKA I KARNE</div>
             <div style={{ display:"flex", gap:8, marginBottom:12, flexWrap:"wrap" }}>
               <button onClick={() => W({ extraTime: !extraTime })}
-                style={{ padding:"7px 12px", borderRadius:7, border:`1px solid ${extraTime?"#ff6b35":"#3b1f5c"}`, background:extraTime?"rgba(255,107,53,.18)":"transparent", color:extraTime?"#ffb088":"#64748b", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                style={{ padding:"7px 12px", borderRadius:7, border:`1px solid ${extraTime?"#00ff85":"#2a3d2f"}`, background:extraTime?"rgba(0,255,133,.18)":"transparent", color:extraTime?"#7dffb8":"#64748b", fontSize:12, fontWeight:600, cursor:"pointer" }}>
                 {extraTime?"✓ ":""}Dogrywka rozegrana
               </button>
               <button onClick={() => W({ pensOn: !pensOn })}
-                style={{ padding:"7px 12px", borderRadius:7, border:`1px solid ${pensOn?"#00d9c0":"#3b1f5c"}`, background:pensOn?"rgba(0,217,192,.18)":"transparent", color:pensOn?"#7ef5e5":"#64748b", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                style={{ padding:"7px 12px", borderRadius:7, border:`1px solid ${pensOn?"#00d9c0":"#2a3d2f"}`, background:pensOn?"rgba(0,217,192,.18)":"transparent", color:pensOn?"#7ef5e5":"#64748b", fontSize:12, fontWeight:600, cursor:"pointer" }}>
                 {pensOn?"✓ ":""}Rzuty karne
               </button>
             </div>
             {pensOn && (
-              <div style={{ display:"flex", alignItems:"center", gap:10, background:"#0c0a1d", borderRadius:8, padding:"10px 12px" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10, background:"#070a08", borderRadius:8, padding:"10px 12px" }}>
                 <div style={{ flex:1, textAlign:"center" }}>
                   <div style={{ fontSize:10, color:"#64748b", marginBottom:3 }}>{teamAName||"A"}</div>
-                  <input type="number" min="0" value={pensA} onChange={e => W({ pensA:e.target.value })} style={{ width:"100%", background:"#221640", border:"1px solid #ff6b35", borderRadius:5, color:"#ffb088", padding:"6px", fontSize:15, textAlign:"center", boxSizing:"border-box" }} />
+                  <input type="number" min="0" value={pensA} onChange={e => W({ pensA:e.target.value })} style={{ width:"100%", background:"#1c2820", border:"1px solid #00ff85", borderRadius:5, color:"#7dffb8", padding:"6px", fontSize:15, textAlign:"center", boxSizing:"border-box" }} />
                 </div>
                 <div style={{ fontSize:16, color:"#334155", fontWeight:800, marginTop:14 }}>:</div>
                 <div style={{ flex:1, textAlign:"center" }}>
                   <div style={{ fontSize:10, color:"#64748b", marginBottom:3 }}>{teamBName||"B"}</div>
-                  <input type="number" min="0" value={pensB} onChange={e => W({ pensB:e.target.value })} style={{ width:"100%", background:"#221640", border:"1px solid #00d9c0", borderRadius:5, color:"#7ef5e5", padding:"6px", fontSize:15, textAlign:"center", boxSizing:"border-box" }} />
+                  <input type="number" min="0" value={pensB} onChange={e => W({ pensB:e.target.value })} style={{ width:"100%", background:"#1c2820", border:"1px solid #00d9c0", borderRadius:5, color:"#7ef5e5", padding:"6px", fontSize:15, textAlign:"center", boxSizing:"border-box" }} />
                 </div>
               </div>
             )}
@@ -228,8 +228,8 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
           </div>
 
           <div style={{ display:"flex", gap:8, marginTop:14 }}>
-            <button onClick={() => W({ step:"1" })} style={{ padding:"9px 16px", background:"transparent", border:"1px solid #3b1f5c", borderRadius:8, color:"#64748b", fontSize:13, cursor:"pointer" }}>← Wróć</button>
-            <button onClick={() => W({ step:"3" })} style={{ flex:1, padding:"11px", background:"#ff6b35", border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>Dalej → Oceny</button>
+            <button onClick={() => W({ step:"1" })} style={{ padding:"9px 16px", background:"transparent", border:"1px solid #2a3d2f", borderRadius:8, color:"#64748b", fontSize:13, cursor:"pointer" }}>← Wróć</button>
+            <button onClick={() => W({ step:"3" })} style={{ flex:1, padding:"11px", background:"#00ff85", border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>Dalej → Oceny</button>
           </div>
         </div>
       </div>
@@ -254,33 +254,33 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
       const chg = Math.round(curV * getSessionChangePct(curV, pr-BASE_RATING, pr));
       return (
         <div style={{ marginTop:16 }}>
-          <button onClick={() => W({ activeP:null })} style={{ background:"none", border:"none", color:"#ff6b35", cursor:"pointer", fontSize:13, marginBottom:12, padding:0 }}>← Wróć do składu</button>
-          <div style={{ background:"#221640", border:"1px solid #3b1f5c", borderRadius:12, padding:20 }}>
+          <button onClick={() => W({ activeP:null })} style={{ background:"none", border:"none", color:"#00ff85", cursor:"pointer", fontSize:13, marginBottom:12, padding:0 }}>← Wróć do składu</button>
+          <div style={{ background:"#1c2820", border:"1px solid #2a3d2f", borderRadius:12, padding:20 }}>
             <StepBar step={step} />
             <div style={{ fontSize:17, fontWeight:800, marginBottom:4, color:"#e2e8f0" }}>{p?.name} <span style={{ fontSize:12, color:"#64748b", fontWeight:400 }}>· {p?.position}</span>
               {rnd && <span style={{ fontSize:9, background:"rgba(148,163,184,.15)", border:"1px solid #475569", color:"#94a3b8", borderRadius:3, padding:"1px 6px", marginLeft:8 }}>SPOZA KLASY</span>}
             </div>
             {(myGoals.length>0 || myAssists.length>0) && (
               <div style={{ display:"flex", flexWrap:"wrap", gap:4, marginBottom:12 }}>
-                {myGoals.map((g,i) => <span key={i} style={{ background: g.type==="ownGoal"?"rgba(239,68,68,.2)":"rgba(255,107,53,.2)", border:`1px solid ${g.type==="ownGoal"?"#ef4444":"#ff6b35"}`, borderRadius:4, padding:"2px 8px", fontSize:11, color:g.type==="ownGoal"?"#fca5a5":"#ffb088" }}>{GICO[g.type]||"⚽"}{g.type==="ownGoal"?" samobój":""}{g.minute?" "+goalLabel(g):""}</span>)}
+                {myGoals.map((g,i) => <span key={i} style={{ background: g.type==="ownGoal"?"rgba(239,68,68,.2)":"rgba(0,255,133,.2)", border:`1px solid ${g.type==="ownGoal"?"#ef4444":"#00ff85"}`, borderRadius:4, padding:"2px 8px", fontSize:11, color:g.type==="ownGoal"?"#fca5a5":"#7dffb8" }}>{GICO[g.type]||"⚽"}{g.type==="ownGoal"?" samobój":""}{g.minute?" "+goalLabel(g):""}</span>)}
                 {myAssists.map((g,i) => <span key={i} style={{ background:"rgba(20,184,166,.2)", border:"1px solid #14b8a6", borderRadius:4, padding:"2px 8px", fontSize:11, color:"#5eead4" }}>🎯{g.minute?" "+goalLabel(g):""}</span>)}
               </div>
             )}
             {["pos","gk_pos","neg","gk_neg"].map(cat => (
               <div key={cat} style={{ marginBottom:12 }}>
-                <div style={{ fontSize:10, fontWeight:700, color:cat.includes("neg")?"#ef4444":"#ff6b35", letterSpacing:.8, textTransform:"uppercase", marginBottom:6 }}>{CAT_LABELS[cat]}</div>
+                <div style={{ fontSize:10, fontWeight:700, color:cat.includes("neg")?"#ef4444":"#00ff85", letterSpacing:.8, textTransform:"uppercase", marginBottom:6 }}>{CAT_LABELS[cat]}</div>
                 <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:5 }}>
                   {criteria.filter(c => c.cat===cat).map(c => {
                     const v = parseInt((r.criteria||{})[c.id]||0);
                     return (
-                      <div key={c.id} style={{ background:"#0c0a1d", borderRadius:7, padding:"8px 10px", border:`1px solid ${c.points>0?"#1e3a5f":"#3f1f2f"}` }}>
-                        <div style={{ fontSize:11, fontWeight:600, color:"#e8d5f5", marginBottom:1 }}>{c.label}</div>
+                      <div key={c.id} style={{ background:"#070a08", borderRadius:7, padding:"8px 10px", border:`1px solid ${c.points>0?"#1e3a5f":"#3f1f2f"}` }}>
+                        <div style={{ fontSize:11, fontWeight:600, color:"#d4f5dc", marginBottom:1 }}>{c.label}</div>
                         <div style={{ fontSize:9, color:"#475569", marginBottom:5 }}>{c.desc}</div>
                         <div style={{ display:"flex", alignItems:"center", gap:5 }}>
-                          <button onClick={() => updC(c.id, v-1)} style={{ width:22, height:22, borderRadius:4, background:"#3b1f5c", border:"none", color:"#c9a8e0", cursor:"pointer", fontSize:13, fontWeight:700 }}>−</button>
-                          <span style={{ minWidth:16, textAlign:"center", fontWeight:800, fontSize:13, color:v?(c.points>0?"#ff6b35":"#ef4444"):"#334155" }}>{v}</span>
-                          <button onClick={() => updC(c.id, v+1)} style={{ width:22, height:22, borderRadius:4, background:c.points>0?"rgba(255,107,53,.2)":"rgba(239,68,68,.2)", border:"none", color:c.points>0?"#ffb088":"#fca5a5", cursor:"pointer", fontSize:13, fontWeight:700 }}>+</button>
-                          <span style={{ fontSize:9, color:c.points>0?"#ff6b35":"#ef4444" }}>{c.points>0?"+":""}{c.points}</span>
+                          <button onClick={() => updC(c.id, v-1)} style={{ width:22, height:22, borderRadius:4, background:"#2a3d2f", border:"none", color:"#a8c9b0", cursor:"pointer", fontSize:13, fontWeight:700 }}>−</button>
+                          <span style={{ minWidth:16, textAlign:"center", fontWeight:800, fontSize:13, color:v?(c.points>0?"#00ff85":"#ef4444"):"#334155" }}>{v}</span>
+                          <button onClick={() => updC(c.id, v+1)} style={{ width:22, height:22, borderRadius:4, background:c.points>0?"rgba(0,255,133,.2)":"rgba(239,68,68,.2)", border:"none", color:c.points>0?"#7dffb8":"#fca5a5", cursor:"pointer", fontSize:13, fontWeight:700 }}>+</button>
+                          <span style={{ fontSize:9, color:c.points>0?"#00ff85":"#ef4444" }}>{c.points>0?"+":""}{c.points}</span>
                         </div>
                       </div>
                     );
@@ -290,8 +290,8 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
             ))}
             <label style={{ fontSize:12, color:"#64748b", display:"block", marginTop:4 }}>Notatka</label>
             <input value={r.note||""} onChange={e => setR({ note:e.target.value })} placeholder="opcjonalnie..."
-              style={{ width:"100%", background:"#0c0a1d", border:"1px solid #3b1f5c", borderRadius:6, color:"#e2e8f0", padding:"7px 10px", fontSize:13, marginTop:4, marginBottom:14, boxSizing:"border-box" }} />
-            <div style={{ background:"#0c0a1d", border:"1px solid #ff6b35", borderRadius:8, padding:"10px 14px", display:"flex", justifyContent:"space-between", marginBottom:14 }}>
+              style={{ width:"100%", background:"#070a08", border:"1px solid #2a3d2f", borderRadius:6, color:"#e2e8f0", padding:"7px 10px", fontSize:13, marginTop:4, marginBottom:14, boxSizing:"border-box" }} />
+            <div style={{ background:"#070a08", border:"1px solid #00ff85", borderRadius:8, padding:"10px 14px", display:"flex", justifyContent:"space-between", marginBottom:14 }}>
               <div><div style={{ fontSize:11, color:"#64748b" }}>Ocena</div><div style={{ fontSize:24, fontWeight:900, color:rc(pr) }}>{pr.toFixed(2)}</div></div>
               <div style={{ textAlign:"right" }}>
                 <div style={{ fontSize:11, color:"#64748b" }}>{rnd?"Status":"Zmiana wartości"}</div>
@@ -310,7 +310,7 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
                 ⚠️ {p?.name} jest blisko limitu {fv(MAX_VALUE)} — przy ocenie poniżej {TOP_TIER_MIN_RATING.toFixed(1)} wartość spada x4 szybciej.
               </div>
             )}
-            <button onClick={() => W({ activeP:null })} style={{ width:"100%", padding:"11px", background:"#ff6b35", border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>💾 Zapisz i wróć</button>
+            <button onClick={() => W({ activeP:null })} style={{ width:"100%", padding:"11px", background:"#00ff85", border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>💾 Zapisz i wróć</button>
           </div>
         </div>
       );
@@ -319,14 +319,14 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
     goals.forEach(g => { if (g.scorer) { if (g.type==="ownGoal") ogByP[g.scorer]=(ogByP[g.scorer]||0)+1; else gByP[g.scorer]=(gByP[g.scorer]||0)+1; } });
     return (
       <div style={{ marginTop:16 }}>
-        <div style={{ background:"#221640", border:"1px solid #3b1f5c", borderRadius:12, padding:20 }}>
+        <div style={{ background:"#1c2820", border:"1px solid #2a3d2f", borderRadius:12, padding:20 }}>
           <StepBar step={step} />
-          <div style={{ display:"flex", justifyContent:"center", gap:20, marginBottom:14, padding:"10px", background:"#0c0a1d", borderRadius:8 }}>
-            <span style={{ color:"#ffb088", fontWeight:800, fontSize:15 }}>{teamAName||"A"} {scoreA}</span>
+          <div style={{ display:"flex", justifyContent:"center", gap:20, marginBottom:14, padding:"10px", background:"#070a08", borderRadius:8 }}>
+            <span style={{ color:"#7dffb8", fontWeight:800, fontSize:15 }}>{teamAName||"A"} {scoreA}</span>
             <span style={{ color:"#334155" }}>:</span>
             <span style={{ color:"#7ef5e5", fontWeight:800, fontSize:15 }}>{scoreB} {teamBName||"B"}</span>
           </div>
-          {[{ side:"A", ids:teamA, ac:"#ff6b35", tn:teamAName||"Drużyna A" },{ side:"B", ids:teamB, ac:"#00d9c0", tn:teamBName||"Drużyna B" }].map(({ side, ids, ac, tn }) => (
+          {[{ side:"A", ids:teamA, ac:"#00ff85", tn:teamAName||"Drużyna A" },{ side:"B", ids:teamB, ac:"#00d9c0", tn:teamBName||"Drużyna B" }].map(({ side, ids, ac, tn }) => (
             <div key={side} style={{ marginBottom:14 }}>
               <div style={{ fontSize:11, fontWeight:700, color:ac, marginBottom:7, letterSpacing:.5 }}>{tn.toUpperCase()}</div>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:7 }}>
@@ -339,11 +339,11 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
                   const pr = calcMatchRating(crit, criteria);
                   return (
                     <button key={id} onClick={() => W({ activeP:id })}
-                      style={{ background:"#0c0a1d", border:`1px solid ${hasR?ac:"#3b1f5c"}`, borderRadius:8, padding:"10px", textAlign:"left", cursor:"pointer" }}>
+                      style={{ background:"#070a08", border:`1px solid ${hasR?ac:"#2a3d2f"}`, borderRadius:8, padding:"10px", textAlign:"left", cursor:"pointer" }}>
                       <div style={{ fontWeight:700, fontSize:13, color:"#e2e8f0" }}>{p.name}{p.random && <span style={{ fontSize:9, color:"#94a3b8", marginLeft:4 }}>spoza</span>}</div>
                       <div style={{ fontSize:10, color:"#475569", marginBottom:5 }}>{p.position}</div>
                       <div style={{ display:"flex", gap:4, flexWrap:"wrap", marginBottom:5 }}>
-                        {pG>0 && <span style={{ fontSize:10, background:"rgba(255,107,53,.2)", border:"1px solid #ff6b35", borderRadius:3, padding:"1px 5px", color:"#ffb088" }}>⚽{pG}</span>}
+                        {pG>0 && <span style={{ fontSize:10, background:"rgba(0,255,133,.2)", border:"1px solid #00ff85", borderRadius:3, padding:"1px 5px", color:"#7dffb8" }}>⚽{pG}</span>}
                         {pOG>0 && <span style={{ fontSize:10, background:"rgba(239,68,68,.2)", border:"1px solid #ef4444", borderRadius:3, padding:"1px 5px", color:"#fca5a5" }}>😬{pOG}</span>}
                         {pA>0 && <span style={{ fontSize:10, background:"rgba(20,184,166,.2)", border:"1px solid #14b8a6", borderRadius:3, padding:"1px 5px", color:"#5eead4" }}>🎯{pA}</span>}
                       </div>
@@ -356,8 +356,8 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
             </div>
           ))}
           <div style={{ display:"flex", gap:8, marginTop:8 }}>
-            <button onClick={() => W({ step:"2" })} style={{ padding:"9px 16px", background:"transparent", border:"1px solid #3b1f5c", borderRadius:8, color:"#64748b", fontSize:13, cursor:"pointer" }}>← Wróć</button>
-            <button onClick={() => W({ step:"4" })} style={{ flex:1, padding:"11px", background:"#ff6b35", border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>Dalej → Podsumowanie</button>
+            <button onClick={() => W({ step:"2" })} style={{ padding:"9px 16px", background:"transparent", border:"1px solid #2a3d2f", borderRadius:8, color:"#64748b", fontSize:13, cursor:"pointer" }}>← Wróć</button>
+            <button onClick={() => W({ step:"4" })} style={{ flex:1, padding:"11px", background:"#00ff85", border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>Dalej → Podsumowanie</button>
           </div>
         </div>
       </div>
@@ -370,15 +370,15 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
     const pens = pensOn ? { a:parseInt(pensA)||0, b:parseInt(pensB)||0 } : null;
     return (
       <div style={{ marginTop:16 }}>
-        <div style={{ background:"#221640", border:"1px solid #3b1f5c", borderRadius:12, padding:20 }}>
+        <div style={{ background:"#1c2820", border:"1px solid #2a3d2f", borderRadius:12, padding:20 }}>
           <StepBar step={step} />
-          <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:24, marginBottom:6, padding:"16px", background:"#0c0a1d", borderRadius:12 }}>
-            <div style={{ textAlign:"center" }}><div style={{ fontSize:11, color:"#64748b", marginBottom:4 }}>{teamAName||"A"}</div><div style={{ fontSize:44, fontWeight:900, color:"#ffb088", lineHeight:1 }}>{scoreA}</div></div>
+          <div style={{ display:"flex", justifyContent:"center", alignItems:"center", gap:24, marginBottom:6, padding:"16px", background:"#070a08", borderRadius:12 }}>
+            <div style={{ textAlign:"center" }}><div style={{ fontSize:11, color:"#64748b", marginBottom:4 }}>{teamAName||"A"}</div><div style={{ fontSize:44, fontWeight:900, color:"#7dffb8", lineHeight:1 }}>{scoreA}</div></div>
             <div style={{ fontSize:26, color:"#334155", fontWeight:800 }}>:</div>
             <div style={{ textAlign:"center" }}><div style={{ fontSize:11, color:"#64748b", marginBottom:4 }}>{teamBName||"B"}</div><div style={{ fontSize:44, fontWeight:900, color:"#7ef5e5", lineHeight:1 }}>{scoreB}</div></div>
           </div>
           {(extraTime || pens) && (
-            <div style={{ textAlign:"center", fontSize:11, color:"#c9a8e0", marginBottom:14 }}>
+            <div style={{ textAlign:"center", fontSize:11, color:"#a8c9b0", marginBottom:14 }}>
               {extraTime && <span>po dogrywce</span>}
               {extraTime && pens && <span> · </span>}
               {pens && <span>karne {pens.a}:{pens.b}</span>}
@@ -391,14 +391,14 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
                 const isA = g.teamSide==="A";
                 const isOG = g.type==="ownGoal";
                 return (
-                  <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#0c0a1d", borderRadius:6, marginBottom:4, borderLeft:`3px solid ${isA?"#ff6b35":"#00d9c0"}` }}>
+                  <div key={i} style={{ display:"flex", alignItems:"center", gap:8, padding:"6px 10px", background:"#070a08", borderRadius:6, marginBottom:4, borderLeft:`3px solid ${isA?"#00ff85":"#00d9c0"}` }}>
                     <span style={{ fontSize:11, color:"#475569", minWidth:34 }}>{goalLabel(g)}</span>
                     <span style={{ fontSize:9, color:"#475569" }}>{PHASE_LABELS[goalPhase(g)].split(".")[0]}{goalPhase(g)==="ET"?"":"."}</span>
                     <span>{GICO[g.type]||"⚽"}</span>
                     <span style={{ fontWeight:700, fontSize:13, color:"#e2e8f0" }}>{nameOf(g.scorer)}</span>
                     {isOG && <span style={{ fontSize:10, color:"#ef4444" }}>(samobój)</span>}
                     {g.assist && <span style={{ fontSize:11, color:"#5eead4" }}>🎯 {nameOf(g.assist)}</span>}
-                    <span style={{ marginLeft:"auto", fontSize:10, color:isA?"#ffb088":"#7ef5e5" }}>{isA?(teamAName||"A"):(teamBName||"B")}</span>
+                    <span style={{ marginLeft:"auto", fontSize:10, color:isA?"#7dffb8":"#7ef5e5" }}>{isA?(teamAName||"A"):(teamBName||"B")}</span>
                   </div>
                 );
               })}
@@ -413,15 +413,15 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
             const rating = calcMatchRating(crit, criteria);
             const inA = teamA.includes(id);
             return (
-              <div key={id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 12px", background:"#0c0a1d", borderRadius:6, marginBottom:4, borderLeft:`3px solid ${inA?"#ff6b35":"#00d9c0"}` }}>
+              <div key={id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"7px 12px", background:"#070a08", borderRadius:6, marginBottom:4, borderLeft:`3px solid ${inA?"#00ff85":"#00d9c0"}` }}>
                 <div><span style={{ fontWeight:700, fontSize:13, color:"#e2e8f0" }}>{p.name}</span><span style={{ fontSize:11, color:"#475569", marginLeft:6 }}>{p.position}{p.random?" · spoza":""}</span></div>
                 <span style={{ fontWeight:900, fontSize:18, color:rc(rating) }}>{rating.toFixed(2)}</span>
               </div>
             );
           })}
           <div style={{ display:"flex", gap:8, marginTop:16 }}>
-            <button onClick={() => W({ step:"3" })} style={{ padding:"9px 16px", background:"transparent", border:"1px solid #3b1f5c", borderRadius:8, color:"#64748b", fontSize:13, cursor:"pointer" }}>← Wróć</button>
-            <button onClick={onSubmit} style={{ flex:1, padding:"13px", background:"linear-gradient(135deg,#ff6b35,#e0289d)", border:"none", borderRadius:8, color:"#fff", fontSize:14, fontWeight:800, cursor:"pointer" }}>
+            <button onClick={() => W({ step:"3" })} style={{ padding:"9px 16px", background:"transparent", border:"1px solid #2a3d2f", borderRadius:8, color:"#64748b", fontSize:13, cursor:"pointer" }}>← Wróć</button>
+            <button onClick={onSubmit} style={{ flex:1, padding:"13px", background:"linear-gradient(135deg,#16a34a,#00ff85)", border:"none", borderRadius:8, color:"#06150c", fontSize:14, fontWeight:800, cursor:"pointer" }}>
               {isEdit ? "💾 Zapisz zmiany w meczu" : "💾 Zapisz mecz dla wszystkich"}
             </button>
           </div>
@@ -443,14 +443,14 @@ function ShotMap({ shots, goals, onSave, readOnly }) {
   const [awayShots, setAwayShots] = useState(shots?.awayShots||0);
   useEffect(() => { if (shots) { setHome(shots.home||50); setAway(shots.away||50); setHomeShotsOn(shots.homeShotsOn||0); setAwayShotsOn(shots.awayShotsOn||0); setHomeShots(shots.homeShots||0); setAwayShots(shots.awayShots||0); } }, [shots]);
   const save = () => { onSave({ home, away, homeShotsOn, awayShotsOn, homeShots, awayShots }); setEditing(false); };
-  const Bar = ({ left, right, label, lc="#ff6b35", rc2="#00d9c0" }) => {
+  const Bar = ({ left, right, label, lc="#00ff85", rc2="#00d9c0" }) => {
     const total = left+right||1;
     return (
       <div style={{ marginBottom:10 }}>
         <div style={{ display:"flex", justifyContent:"space-between", fontSize:11, color:"#64748b", marginBottom:3 }}>
           <span style={{ color:lc, fontWeight:700 }}>{left}</span><span style={{ opacity:.6 }}>{label}</span><span style={{ color:rc2, fontWeight:700 }}>{right}</span>
         </div>
-        <div style={{ display:"flex", height:8, borderRadius:4, overflow:"hidden", background:"#3b1f5c" }}>
+        <div style={{ display:"flex", height:8, borderRadius:4, overflow:"hidden", background:"#2a3d2f" }}>
           <div style={{ width:`${(left/total)*100}%`, background:lc, transition:"width .3s" }} />
           <div style={{ width:`${(right/total)*100}%`, background:rc2 }} />
         </div>
@@ -459,13 +459,13 @@ function ShotMap({ shots, goals, onSave, readOnly }) {
   };
   if (!shots && readOnly) return null;
   if (!shots && !editing) return (
-    <button onClick={() => setEditing(true)} style={{ width:"100%", marginTop:10, padding:"7px", background:"transparent", border:"1px dashed #3b1f5c", borderRadius:6, color:"#475569", fontSize:11, cursor:"pointer" }}>
+    <button onClick={() => setEditing(true)} style={{ width:"100%", marginTop:10, padding:"7px", background:"transparent", border:"1px dashed #2a3d2f", borderRadius:6, color:"#475569", fontSize:11, cursor:"pointer" }}>
       + Dodaj statystyki meczu (posiadanie, strzały...)
     </button>
   );
   if (editing) return (
-    <div style={{ marginTop:10, background:"#0c0a1d", borderRadius:8, padding:14, border:"1px solid #3b1f5c" }}>
-      <div style={{ fontSize:12, fontWeight:700, color:"#c9a8e0", marginBottom:12 }}>📊 Statystyki meczu</div>
+    <div style={{ marginTop:10, background:"#070a08", borderRadius:8, padding:14, border:"1px solid #2a3d2f" }}>
+      <div style={{ fontSize:12, fontWeight:700, color:"#a8c9b0", marginBottom:12 }}>📊 Statystyki meczu</div>
       {[
         ["Posiadanie piłki (%)", home, setHome, away, setAway],
         ["Strzały celne", homeShotsOn, setHomeShotsOn, awayShotsOn, setAwayShotsOn],
@@ -474,29 +474,29 @@ function ShotMap({ shots, goals, onSave, readOnly }) {
         <div key={label} style={{ marginBottom:10 }}>
           <div style={{ fontSize:11, color:"#475569", marginBottom:4 }}>{label}</div>
           <div style={{ display:"flex", gap:8, alignItems:"center" }}>
-            <input type="number" value={lv} onChange={e => ls(parseInt(e.target.value)||0)} style={{ width:56, background:"#221640", border:"1px solid #ff6b35", borderRadius:5, color:"#ffb088", padding:"5px 7px", fontSize:13, textAlign:"center" }} />
+            <input type="number" value={lv} onChange={e => ls(parseInt(e.target.value)||0)} style={{ width:56, background:"#1c2820", border:"1px solid #00ff85", borderRadius:5, color:"#7dffb8", padding:"5px 7px", fontSize:13, textAlign:"center" }} />
             <span style={{ color:"#334155", fontSize:12 }}>vs</span>
-            <input type="number" value={rv} onChange={e => rs(parseInt(e.target.value)||0)} style={{ width:56, background:"#221640", border:"1px solid #00d9c0", borderRadius:5, color:"#7ef5e5", padding:"5px 7px", fontSize:13, textAlign:"center" }} />
+            <input type="number" value={rv} onChange={e => rs(parseInt(e.target.value)||0)} style={{ width:56, background:"#1c2820", border:"1px solid #00d9c0", borderRadius:5, color:"#7ef5e5", padding:"5px 7px", fontSize:13, textAlign:"center" }} />
           </div>
         </div>
       ))}
       <div style={{ display:"flex", gap:6 }}>
-        <button onClick={save} style={{ flex:1, padding:"8px", background:"#ff6b35", border:"none", borderRadius:6, color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}>Zapisz</button>
-        <button onClick={() => setEditing(false)} style={{ padding:"8px 12px", background:"transparent", border:"1px solid #3b1f5c", borderRadius:6, color:"#64748b", fontSize:12, cursor:"pointer" }}>Anuluj</button>
+        <button onClick={save} style={{ flex:1, padding:"8px", background:"#00ff85", border:"none", borderRadius:6, color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}>Zapisz</button>
+        <button onClick={() => setEditing(false)} style={{ padding:"8px 12px", background:"transparent", border:"1px solid #2a3d2f", borderRadius:6, color:"#64748b", fontSize:12, cursor:"pointer" }}>Anuluj</button>
       </div>
     </div>
   );
   return (
-    <div style={{ marginTop:10, background:"#0c0a1d", borderRadius:8, padding:12, border:"1px solid #3b1f5c" }}>
+    <div style={{ marginTop:10, background:"#070a08", borderRadius:8, padding:12, border:"1px solid #2a3d2f" }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
         <div style={{ fontSize:11, fontWeight:700, color:"#475569" }}>📊 Statystyki</div>
         {!readOnly && <button onClick={() => setEditing(true)} style={{ background:"none", border:"none", color:"#475569", cursor:"pointer", fontSize:11 }}>✏️</button>}
       </div>
-      <Bar left={shots.home} right={shots.away} label="Posiadanie %" lc="#ff6b35" rc2="#00d9c0" />
+      <Bar left={shots.home} right={shots.away} label="Posiadanie %" lc="#00ff85" rc2="#00d9c0" />
       <Bar left={shots.homeShotsOn} right={shots.awayShotsOn} label="Strzały celne" />
       <Bar left={shots.homeShots} right={shots.awayShots} label="Strzały ogółem" />
       <div style={{ display:"flex", justifyContent:"center", gap:16, marginTop:8, fontSize:10 }}>
-        <span style={{ color:"#ff6b35" }}>■ {goals.teamAName||"Dom"}</span>
+        <span style={{ color:"#00ff85" }}>■ {goals.teamAName||"Dom"}</span>
         <span style={{ color:"#00d9c0" }}>■ {goals.teamBName||"Gość"}</span>
       </div>
     </div>
@@ -520,7 +520,7 @@ function MatchTimeline({ entry }) {
     const isA = g.teamSide==="A";
     const isOG = g.type==="ownGoal";
     return (
-      <div key={i} style={{ display:"flex", alignItems:"center", gap:7, padding:"4px 8px", background:"#0c0a1d", borderRadius:5, marginBottom:3, borderLeft:`2px solid ${isA?"#ff6b35":"#00d9c0"}` }}>
+      <div key={i} style={{ display:"flex", alignItems:"center", gap:7, padding:"4px 8px", background:"#070a08", borderRadius:5, marginBottom:3, borderLeft:`2px solid ${isA?"#00ff85":"#00d9c0"}` }}>
         <span style={{ fontSize:11, color:"#475569", minWidth:30 }}>{goalLabel(g)}</span>
         <span style={{ fontSize:12 }}>{GICO[g.type]||"⚽"}</span>
         <span style={{ fontWeight:700, fontSize:12, color:"#e2e8f0" }}>{nameOf(g.scorer)}</span>
@@ -529,11 +529,11 @@ function MatchTimeline({ entry }) {
       </div>
     );
   };
-  const Divider = (text, color="#3b1f5c") => (
+  const Divider = (text, color="#2a3d2f") => (
     <div style={{ display:"flex", alignItems:"center", gap:8, margin:"7px 0" }}>
-      <div style={{ flex:1, height:1, background:"#221640" }} />
+      <div style={{ flex:1, height:1, background:"#1c2820" }} />
       <span style={{ fontSize:9, fontWeight:700, color, letterSpacing:.5, whiteSpace:"nowrap" }}>{text}</span>
-      <div style={{ flex:1, height:1, background:"#221640" }} />
+      <div style={{ flex:1, height:1, background:"#1c2820" }} />
     </div>
   );
 
@@ -541,12 +541,12 @@ function MatchTimeline({ entry }) {
     <div style={{ marginBottom:10 }}>
       <div style={{ fontSize:10, color:"#334155", marginBottom:6, letterSpacing:.5 }}>PRZEBIEG MECZU</div>
       {g1.map(Row)}
-      {showHalf && Divider(`PRZERWA · ${htA}:${htB}`, "#c9a8e0")}
+      {showHalf && Divider(`PRZERWA · ${htA}:${htB}`, "#a8c9b0")}
       {g2.map(Row)}
-      {showET && Divider("DOGRYWKA", "#ffb088")}
+      {showET && Divider("DOGRYWKA", "#7dffb8")}
       {gE.map(Row)}
       {hasPens && (
-        <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, padding:"7px 8px", background:"#0c0a1d", borderRadius:5, marginTop:4, border:"1px dashed #3b1f5c" }}>
+        <div style={{ display:"flex", alignItems:"center", justifyContent:"center", gap:8, padding:"7px 8px", background:"#070a08", borderRadius:5, marginTop:4, border:"1px dashed #2a3d2f" }}>
           <span style={{ fontSize:13 }}>🫵</span>
           <span style={{ fontSize:11, color:"#94a3b8", fontWeight:600 }}>Rzuty karne</span>
           <span style={{ fontSize:14, fontWeight:900, color:"#e2e8f0" }}>{pens.a}<span style={{ color:"#334155", margin:"0 3px" }}>:</span>{pens.b}</span>
@@ -575,7 +575,7 @@ function CompactMatchRow({ m, playerId, criteria }) {
   );
 
   return (
-    <div style={{ borderBottom:"1px solid #1c1430" }}>
+    <div style={{ borderBottom:"1px solid #1c2820" }}>
       <div onClick={() => setOpen(o => !o)} style={{ display:"flex", alignItems:"center", gap:10, padding:"9px 4px", cursor:"pointer" }}>
         <div style={{ width:46, flexShrink:0 }}>
           <div style={{ fontSize:11, fontWeight:700, color:"#cbd5e1" }}>{dd}.{mm}.{yyyy.slice(2)}</div>
@@ -588,11 +588,10 @@ function CompactMatchRow({ m, playerId, criteria }) {
           </div>
           <div style={{ display:"flex", alignItems:"center", gap:7, marginTop:3 }}>
             <span style={{ fontSize:13, fontWeight:800, color:rc2 }}>{m.score || "?:?"}</span>
-            {iconGroup("⚽", realGoals.length, "#ffb088", "Gole")}
+            {iconGroup("⚽", realGoals.length, "#7dffb8", "Gole")}
             {iconGroup("😬", ownGoals.length, "#fca5a5", "Bramki samobójcze")}
             {iconGroup("🎯", myAssists.length, "#5eead4", "Asysty")}
             {m.viral && <span title="Viral moment">🔥</span>}
-            {m.milestone && <span title={`Kamień milowy ${fv(m.milestone)}`}>🏆</span>}
           </div>
         </div>
         <div style={{ flexShrink:0, display:"flex", flexDirection:"column", alignItems:"flex-end", gap:2 }}>
@@ -603,14 +602,14 @@ function CompactMatchRow({ m, playerId, criteria }) {
             <span style={{ fontSize:9, fontWeight:700, color:m.valDelta>=0?"#22c55e":"#ef4444" }}>{m.valDelta>=0?"+":""}{fv(Math.abs(m.valDelta))}</span>
           )}
         </div>
-        <span style={{ fontSize:10, color:"#3b1f5c", flexShrink:0 }}>{open?"▲":"▼"}</span>
+        <span style={{ fontSize:10, color:"#2a3d2f", flexShrink:0 }}>{open?"▲":"▼"}</span>
       </div>
       {open && (
         <div style={{ padding:"0 4px 12px 56px" }}>
           {filledCriteria.length>0 && (
             <div style={{ display:"flex", flexWrap:"wrap", gap:3, marginBottom:6 }}>
               {filledCriteria.map(c => (
-                <span key={c.id} style={{ background:c.points>0?"rgba(255,107,53,.1)":"rgba(239,68,68,.1)", border:`1px solid ${c.points>0?"#ff6b35":"#ef4444"}`, borderRadius:3, padding:"1px 6px", fontSize:10, color:c.points>0?"#ffb088":"#fca5a5" }}>
+                <span key={c.id} style={{ background:c.points>0?"rgba(0,255,133,.1)":"rgba(239,68,68,.1)", border:`1px solid ${c.points>0?"#00ff85":"#ef4444"}`, borderRadius:3, padding:"1px 6px", fontSize:10, color:c.points>0?"#7dffb8":"#fca5a5" }}>
                   {c.label.split(" ")[0]} ×{m.criteria[c.id]}
                 </span>
               ))}
@@ -640,11 +639,11 @@ function MatchCard({ entry, criteria, admin, onShots, onEdit }) {
     const pOG = goals.filter(g => g.scorer===pp.id && g.type==="ownGoal").length;
     const pA = goals.filter(g => g.assist===pp.id).length;
     return (
-      <div key={pp.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"4px 0", borderBottom:"1px solid #221640" }}>
-        <div style={{ fontSize:12, color:"#c9a8e0" }}>
+      <div key={pp.id} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"4px 0", borderBottom:"1px solid #1c2820" }}>
+        <div style={{ fontSize:12, color:"#a8c9b0" }}>
           {pp.name}
           {pp.random && <span style={{ fontSize:9, color:"#475569", marginLeft:4 }}>spoza</span>}
-          {pG>0 && <span style={{ fontSize:10, color:"#ffb088", marginLeft:4 }}>⚽{pG}</span>}
+          {pG>0 && <span style={{ fontSize:10, color:"#7dffb8", marginLeft:4 }}>⚽{pG}</span>}
           {pOG>0 && <span style={{ fontSize:10, color:"#ef4444", marginLeft:4 }}>😬{pOG}</span>}
           {pA>0 && <span style={{ fontSize:10, color:"#5eead4", marginLeft:2 }}>🎯{pA}</span>}
         </div>
@@ -654,7 +653,7 @@ function MatchCard({ entry, criteria, admin, onShots, onEdit }) {
   };
 
   return (
-    <div style={{ background:"#150d2e", border:"1px solid #221640", borderRadius:12, padding:18, marginBottom:14 }}>
+    <div style={{ background:"#0f1612", border:"1px solid #1c2820", borderRadius:12, padding:18, marginBottom:14 }}>
       <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:14 }}>
         <div>
           <div style={{ fontSize:11, color:"#334155", marginBottom:4 }}>{fmtPL(entry.date)}</div>
@@ -663,19 +662,19 @@ function MatchCard({ entry, criteria, admin, onShots, onEdit }) {
         <div style={{ display:"flex", alignItems:"flex-start", gap:10 }}>
           <div style={{ textAlign:"center" }}>
             <div style={{ fontSize:28, fontWeight:900, letterSpacing:-1 }}>
-              <span style={{ color:"#ffb088" }}>{isNaN(sA)?0:sA}</span>
+              <span style={{ color:"#7dffb8" }}>{isNaN(sA)?0:sA}</span>
               <span style={{ color:"#334155", margin:"0 4px" }}>:</span>
               <span style={{ color:"#7ef5e5" }}>{isNaN(sB)?0:sB}</span>
             </div>
             {(entry.extraTime || showPens) && (
-              <div style={{ fontSize:9, color:"#c9a8e0", marginTop:2 }}>
+              <div style={{ fontSize:9, color:"#a8c9b0", marginTop:2 }}>
                 {entry.extraTime && "po dogr."}{entry.extraTime && showPens && " · "}{showPens && `k. ${pens.a}:${pens.b}`}
               </div>
             )}
           </div>
           {admin && onEdit && (
             <button onClick={onEdit} title="Edytuj mecz"
-              style={{ background:"rgba(255,107,53,.12)", border:"1px solid #ff6b35", borderRadius:7, color:"#ffb088", cursor:"pointer", fontSize:12, padding:"5px 8px", fontWeight:700 }}>
+              style={{ background:"rgba(0,255,133,.12)", border:"1px solid #00ff85", borderRadius:7, color:"#7dffb8", cursor:"pointer", fontSize:12, padding:"5px 8px", fontWeight:700 }}>
               ✏️
             </button>
           )}
@@ -689,7 +688,7 @@ function MatchCard({ entry, criteria, admin, onShots, onEdit }) {
         </div>
       ) : (
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:12 }}>
-          {[{ side:"A", tN:tAN, ac:"#ffb088" },{ side:"B", tN:tBN, ac:"#7ef5e5" }].map(({ side, tN, ac }) => (
+          {[{ side:"A", tN:tAN, ac:"#7dffb8" },{ side:"B", tN:tBN, ac:"#7ef5e5" }].map(({ side, tN, ac }) => (
             <div key={side}>
               <div style={{ fontSize:10, fontWeight:700, color:ac, marginBottom:5 }}>{tN}</div>
               {entry.participants.filter(pp => pp.side===side).sort((a,b) => b.rating-a.rating).map(Participant)}
@@ -723,13 +722,13 @@ function badgesFor(pid, lca) {
 function AwardLine({ icon, label, players, extra, color="#e2e8f0" }) {
   const names = (players && players.length) ? players.map(p => p.name).join(", ") : null;
   return (
-    <div style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderBottom:"1px solid #221640" }}>
+    <div style={{ display:"flex", alignItems:"center", gap:10, padding:"7px 0", borderBottom:"1px solid #1c2820" }}>
       <span style={{ fontSize:18, width:26, textAlign:"center" }}>{icon}</span>
       <div style={{ flex:1 }}>
         <div style={{ fontSize:10, color:"#64748b" }}>{label}</div>
         <div style={{ fontSize:13, fontWeight:700, color:names?color:"#334155" }}>{names || "— brak —"}</div>
       </div>
-      {names && extra && <div style={{ fontSize:12, fontWeight:800, color:"#ffb088", whiteSpace:"nowrap" }}>{extra}</div>}
+      {names && extra && <div style={{ fontSize:12, fontWeight:800, color:"#7dffb8", whiteSpace:"nowrap" }}>{extra}</div>}
     </div>
   );
 }
@@ -757,7 +756,7 @@ function SeasonCard({ season, players, criteria, defaultOpen, seasonName, readOn
             <span style={{ fontWeight:800, fontSize:12, color:medalColor(i), width:18 }}>#{i+1}</span>
             <span style={{ fontSize:12, color:"#e2e8f0" }}>{x.p.name}</span>
           </div>
-          <span style={{ fontSize:12, fontWeight:700, color:"#ffb088" }}>{fmt(x)} <span style={{ color:"#475569", fontWeight:400, fontSize:10 }}>{unit}</span></span>
+          <span style={{ fontSize:12, fontWeight:700, color:"#7dffb8" }}>{fmt(x)} <span style={{ color:"#475569", fontWeight:400, fontSize:10 }}>{unit}</span></span>
         </div>
       ))}
       {rows.length===0 && <div style={{ fontSize:11, color:"#334155", fontStyle:"italic" }}>Brak danych</div>}
@@ -765,7 +764,7 @@ function SeasonCard({ season, players, criteria, defaultOpen, seasonName, readOn
   );
 
   return (
-    <div style={{ background:"#150d2e", border:`1px solid ${live?"#ff6b35":"#221640"}`, borderRadius:12, padding:16, marginBottom:14 }}>
+    <div style={{ background:"#0f1612", border:`1px solid ${live?"#00ff85":"#1c2820"}`, borderRadius:12, padding:16, marginBottom:14 }}>
       <div onClick={() => setOpen(o => !o)} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer" }}>
         <div style={{ flex:1, minWidth:0 }}>
           <div style={{ display:"flex", alignItems:"center", gap:8, flexWrap:"wrap" }}>
@@ -774,9 +773,9 @@ function SeasonCard({ season, players, criteria, defaultOpen, seasonName, readOn
                 <input autoFocus value={nameDraft} onChange={e => setNameDraft(e.target.value)}
                   placeholder={`Sezon ${season.index}`} maxLength={40}
                   onKeyDown={e => { if (e.key==="Enter") saveEdit(e); if (e.key==="Escape") cancelEdit(e); }}
-                  style={{ background:"#0c0a1d", border:"1px solid #ff6b35", borderRadius:6, color:"#e2e8f0", padding:"4px 8px", fontSize:14, fontWeight:700, width:160 }} />
-                <button onClick={saveEdit} style={{ background:"#ff6b35", border:"none", borderRadius:5, color:"#fff", fontSize:11, fontWeight:700, padding:"4px 8px", cursor:"pointer" }}>✓</button>
-                <button onClick={cancelEdit} style={{ background:"transparent", border:"1px solid #3b1f5c", borderRadius:5, color:"#64748b", fontSize:11, padding:"4px 8px", cursor:"pointer" }}>✕</button>
+                  style={{ background:"#070a08", border:"1px solid #00ff85", borderRadius:6, color:"#e2e8f0", padding:"4px 8px", fontSize:14, fontWeight:700, width:160 }} />
+                <button onClick={saveEdit} style={{ background:"#00ff85", border:"none", borderRadius:5, color:"#fff", fontSize:11, fontWeight:700, padding:"4px 8px", cursor:"pointer" }}>✓</button>
+                <button onClick={cancelEdit} style={{ background:"transparent", border:"1px solid #2a3d2f", borderRadius:5, color:"#64748b", fontSize:11, padding:"4px 8px", cursor:"pointer" }}>✕</button>
               </div>
             ) : (
               <>
@@ -786,7 +785,7 @@ function SeasonCard({ season, players, criteria, defaultOpen, seasonName, readOn
               </>
             )}
             {live && <span style={{ fontSize:9, fontWeight:800, color:"#fff", background:"#ef4444", borderRadius:4, padding:"2px 6px" }}>● NA ŻYWO</span>}
-            {!live && season.completed && <span style={{ fontSize:9, fontWeight:700, color:"#475569", border:"1px solid #3b1f5c", borderRadius:4, padding:"2px 6px" }}>zakończony</span>}
+            {!live && season.completed && <span style={{ fontSize:9, fontWeight:700, color:"#475569", border:"1px solid #2a3d2f", borderRadius:4, padding:"2px 6px" }}>zakończony</span>}
             {rolledOver && <span title="Wartości zostały podzielone przez 3, a premie za nagrody naliczone" style={{ fontSize:9, fontWeight:700, color:"#22c55e", border:"1px solid #166534", borderRadius:4, padding:"2px 6px" }}>✓ rozliczony (÷3 + premie)</span>}
           </div>
           <div style={{ fontSize:11, color:"#64748b", marginTop:2 }}>{rangeTxt} · {season.matches.length} {season.matches.length===1?"mecz":"meczów"}</div>
@@ -795,10 +794,10 @@ function SeasonCard({ season, players, criteria, defaultOpen, seasonName, readOn
       </div>
 
       {/* Piłkarz sezonu */}
-      <div style={{ marginTop:12, background:"linear-gradient(135deg,rgba(255,107,53,.12),rgba(224,40,157,.08))", border:"1px solid #7c2d12", borderRadius:10, padding:"12px 14px" }}>
-        <div style={{ fontSize:10, color:"#ffb088", letterSpacing:.5, marginBottom:2 }}>👑 PIŁKARZ SEZONU {live?"(prowizorycznie)":""} <span style={{ color:"#22c55e", fontWeight:700 }}>· +{fv(SEASON_BONUSES.potm)}</span></div>
+      <div style={{ marginTop:12, background:"linear-gradient(135deg,rgba(0,255,133,.12),rgba(22,163,74,.08))", border:"1px solid #15803d", borderRadius:10, padding:"12px 14px" }}>
+        <div style={{ fontSize:10, color:"#7dffb8", letterSpacing:.5, marginBottom:2 }}>👑 PIŁKARZ SEZONU {live?"(prowizorycznie)":""} <span style={{ color:"#22c55e", fontWeight:700 }}>· +{fv(SEASON_BONUSES.potm)}</span></div>
         {a.potm
-          ? <div style={{ fontSize:18, fontWeight:900, color:"#fff" }}>{a.potm.name} <span style={{ fontSize:12, fontWeight:600, color:"#c9a8e0" }}>· {a.potmWins} {a.potmWins===1?"kategoria":"kategorie"}</span></div>
+          ? <div style={{ fontSize:18, fontWeight:900, color:"#fff" }}>{a.potm.name} <span style={{ fontSize:12, fontWeight:600, color:"#a8c9b0" }}>· {a.potmWins} {a.potmWins===1?"kategoria":"kategorie"}</span></div>
           : <div style={{ fontSize:14, color:"#94a3b8" }}>— jeszcze nikt nie zagrał —</div>}
       </div>
 
@@ -821,14 +820,14 @@ function SeasonCard({ season, players, criteria, defaultOpen, seasonName, readOn
       {/* Mecz sezonu */}
       {a.matchOfSeason && (
         <div style={{ marginTop:14 }}>
-          <div style={{ fontSize:10, fontWeight:700, color:"#ffb088", letterSpacing:.5, marginBottom:8 }}>🏟️ MECZ SEZONU</div>
+          <div style={{ fontSize:10, fontWeight:700, color:"#7dffb8", letterSpacing:.5, marginBottom:8 }}>🏟️ MECZ SEZONU</div>
           <MatchCard entry={a.matchOfSeason} criteria={criteria} admin={false} onShots={() => {}} />
         </div>
       )}
 
       {open && (
-        <div style={{ marginTop:8, paddingTop:12, borderTop:"1px solid #221640" }}>
-          <div style={{ fontSize:11, fontWeight:700, color:"#ff6b35", marginBottom:8, letterSpacing:.5 }}>⚽ KLASYFIKACJA STRZELCÓW</div>
+        <div style={{ marginTop:8, paddingTop:12, borderTop:"1px solid #1c2820" }}>
+          <div style={{ fontSize:11, fontWeight:700, color:"#00ff85", marginBottom:8, letterSpacing:.5 }}>⚽ KLASYFIKACJA STRZELCÓW</div>
           {miniRank(a.ranks.scorers, x => x.n, "goli")}
           <div style={{ fontSize:11, fontWeight:700, color:"#14b8a6", marginBottom:8, letterSpacing:.5 }}>🎯 KLASYFIKACJA ASYST</div>
           {miniRank(a.ranks.assists, x => x.n, "asyst")}
@@ -839,7 +838,7 @@ function SeasonCard({ season, players, criteria, defaultOpen, seasonName, readOn
 
           {season.matches.length>0 && (
             <>
-              <div style={{ fontSize:11, fontWeight:700, color:"#c9a8e0", margin:"14px 0 8px", letterSpacing:.5 }}>📅 MECZE W SEZONIE</div>
+              <div style={{ fontSize:11, fontWeight:700, color:"#a8c9b0", margin:"14px 0 8px", letterSpacing:.5 }}>📅 MECZE W SEZONIE</div>
               {[...season.matches].sort((m1,m2) => m2.date.localeCompare(m1.date)).map((e,i) => (
                 <MatchCard key={i} entry={e} criteria={criteria} admin={false} onShots={() => {}} />
               ))}
@@ -856,8 +855,8 @@ function SeasonsView({ players, criteria, seasonNames, readOnly, onRename }) {
   return (
     <div style={{ marginTop:20 }}>
       <div style={LABEL}>PIŁKARZE SEZONU · NAGRODY</div>
-      <div style={{ background:"rgba(255,107,53,.08)", border:"1px solid #7c2d12", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:11, color:"#c9a8e0", lineHeight:1.5 }}>
-        Sezony trwają <b style={{ color:"#ffb088" }}>od poniedziałku do niedzieli</b>. Pierwszy sezon kończy się w niedzielę <b style={{ color:"#ffb088" }}>{fmtPL(FIRST_SEASON_END)}</b> (uwaga: w zgłoszeniu padło „27.06", ale to sobota — najbliższa niedziela to 28.06). Po każdym sezonie wyłaniani są zwycięzcy kategorii, a najlepszy zawodnik zostaje <b style={{ color:"#ffb088" }}>Piłkarzem Sezonu</b>.
+      <div style={{ background:"rgba(0,255,133,.08)", border:"1px solid #15803d", borderRadius:10, padding:"10px 14px", marginBottom:16, fontSize:11, color:"#a8c9b0", lineHeight:1.5 }}>
+        Sezony trwają <b style={{ color:"#7dffb8" }}>od poniedziałku do niedzieli</b>. Pierwszy sezon kończy się w niedzielę <b style={{ color:"#7dffb8" }}>{fmtPL(FIRST_SEASON_END)}</b> (uwaga: w zgłoszeniu padło „27.06", ale to sobota — najbliższa niedziela to 28.06). Po każdym sezonie wyłaniani są zwycięzcy kategorii, a najlepszy zawodnik zostaje <b style={{ color:"#7dffb8" }}>Piłkarzem Sezonu</b>.
       </div>
       {seasons.map((s,i) => <SeasonCard key={s.index} season={s} players={players} criteria={criteria} defaultOpen={i===0} seasonName={seasonNames?.[s.index]} readOnly={readOnly} onRename={onRename} />)}
     </div>
@@ -866,12 +865,12 @@ function SeasonsView({ players, criteria, seasonNames, readOnly, onRename }) {
 
 // ─── INFO / PRZEWODNIK ────────────────────────────────────────────────────────
 function InfoView() {
-  const H = ({ children }) => <div style={{ fontSize:14, fontWeight:800, color:"#ffb088", marginBottom:8 }}>{children}</div>;
-  const P = ({ children }) => <p style={{ fontSize:12.5, color:"#c9a8e0", lineHeight:1.6, margin:"0 0 8px" }}>{children}</p>;
+  const H = ({ children }) => <div style={{ fontSize:14, fontWeight:800, color:"#7dffb8", marginBottom:8 }}>{children}</div>;
+  const P = ({ children }) => <p style={{ fontSize:12.5, color:"#a8c9b0", lineHeight:1.6, margin:"0 0 8px" }}>{children}</p>;
   const Li = ({ ico, children }) => (
     <div style={{ display:"flex", gap:8, marginBottom:6 }}>
       <span style={{ fontSize:14, width:22, textAlign:"center", flexShrink:0 }}>{ico}</span>
-      <span style={{ fontSize:12.5, color:"#c9a8e0", lineHeight:1.5 }}>{children}</span>
+      <span style={{ fontSize:12.5, color:"#a8c9b0", lineHeight:1.5 }}>{children}</span>
     </div>
   );
   return (
@@ -880,28 +879,31 @@ function InfoView() {
 
       <div style={CARD}>
         <H>👋 O aplikacji</H>
-        <P>Wakacje FC to system oceniania zawodników po każdym meczu. Na podstawie ocen liczona jest <b style={{ color:"#ffb088" }}>wartość rynkowa</b> każdego gracza, a co tydzień rozgrywany jest osobny sezon z własnymi nagrodami.</P>
+        <P>Piękni i Młodzi FC to system oceniania zawodników po każdym meczu. Na podstawie ocen liczona jest <b style={{ color:"#7dffb8" }}>wartość rynkowa</b> każdego gracza, a co tydzień rozgrywany jest osobny sezon z własnymi nagrodami.</P>
       </div>
 
       <div style={CARD}>
         <H>👁️ Tryby</H>
-        <Li ico="👁️">Tryb <b style={{ color:"#ffb088" }}>Widz</b> — podgląd rankingu, historii, statystyk i sezonów. Bez hasła, bez edycji.</Li>
-        <Li ico="🛠️">Tryb <b style={{ color:"#ffb088" }}>Administrator</b> — pełny dostęp: dodawanie meczów, opinii, edycja kryteriów. Wymaga hasła.</Li>
+        <Li ico="👁️">Tryb <b style={{ color:"#7dffb8" }}>Widz</b> — podgląd rankingu, historii, statystyk i sezonów. Bez hasła, bez edycji.</Li>
+        <Li ico="🛠️">Tryb <b style={{ color:"#7dffb8" }}>Administrator</b> — pełny dostęp: dodawanie meczów, opinii, edycja kryteriów. Wymaga hasła.</Li>
         <Li ico="🔄">Tryb zmienisz w każdej chwili przyciskiem <b>„Zmień tryb"</b> na górze.</Li>
       </div>
 
       <div style={CARD}>
         <H>⭐ Oceny i wartość</H>
-        <Li ico="🎯">Każdy zawodnik startuje od bazowej oceny <b style={{ color:"#ffb088" }}>{BASE_RATING}</b>. Plusy i minusy z kryteriów podnoszą lub obniżają ocenę (od 1 do 10).</Li>
+        <Li ico="🎯">Każdy zawodnik startuje od bazowej oceny <b style={{ color:"#7dffb8" }}>{BASE_RATING}</b>. Plusy i minusy z kryteriów podnoszą lub obniżają ocenę (od 1 do 10).</Li>
         <Li ico="💰">Wartość rośnie po dobrych meczach i spada po słabych. Im niższa wartość zawodnika, tym większe wahania procentowe.</Li>
-        <Li ico="🔥">Seria dobrych występów daje <b style={{ color:"#ffb088" }}>bonus formy +30%</b> do wartości (próg zależy od poziomu zawodnika).</Li>
+        <Li ico="📈">Wzrost wartości w pojedynczym meczu jest ograniczony do <b style={{ color:"#7dffb8" }}>{fv(MAX_GAIN_PER_MATCH)}</b>, niezależnie od oceny.</Li>
+        <Li ico="🔥">Seria dobrych występów daje <b style={{ color:"#7dffb8" }}>bonus formy +30%</b> do wartości (próg zależy od poziomu zawodnika).</Li>
+        <Li ico="✨">Po bardzo dobrym meczu (ocena ≥{VIRAL_MIN_RATING}) jest losowa szansa na <b style={{ color:"#7dffb8" }}>„viral moment"</b> — dodatkowy jednorazowy bonus.</Li>
         <Li ico="💬">Opinie klasy (👍/👎) lekko korygują wartość.</Li>
+        <Li ico="🚧">Wartość rynkowa ma twardy sufit <b style={{ color:"#7dffb8" }}>{fv(MAX_VALUE)}</b>. Blisko tego progu trzeba utrzymywać ocenę ≥{TOP_TIER_MIN_RATING.toFixed(1)} w każdym meczu, inaczej wartość spada {TOP_TIER_DROP_MULT}× szybciej.</Li>
       </div>
 
       <div style={CARD}>
         <H>🗓️ Sezony</H>
-        <Li ico="📆">Sezon trwa <b style={{ color:"#ffb088" }}>od poniedziałku do niedzieli</b>.</Li>
-        <Li ico="1️⃣">Pierwszy sezon: od startu projektu do niedzieli <b style={{ color:"#ffb088" }}>{fmtPL(FIRST_SEASON_END)}</b>. (W zgłoszeniu padło „27.06", lecz to sobota — przyjęto najbliższą niedzielę, 28.06, żeby każdy sezon był pełnym tygodniem.)</Li>
+        <Li ico="📆">Sezon trwa <b style={{ color:"#7dffb8" }}>od poniedziałku do niedzieli</b>.</Li>
+        <Li ico="1️⃣">Pierwszy sezon: od startu projektu do niedzieli <b style={{ color:"#7dffb8" }}>{fmtPL(FIRST_SEASON_END)}</b>. (W zgłoszeniu padło „27.06", lecz to sobota — przyjęto najbliższą niedzielę, 28.06, żeby każdy sezon był pełnym tygodniem.)</Li>
         <Li ico="⏭️">Kolejne sezony to kolejne pełne tygodnie (pon–nd).</Li>
       </div>
 
@@ -919,7 +921,7 @@ function InfoView() {
 
       <div style={CARD}>
         <H>🎖️ Odznaki przy rankingu</H>
-        <P>Przy nazwiskach w rankingu pojawiają się odznaki zdobyte w <b style={{ color:"#ffb088" }}>ostatnim zakończonym sezonie</b>:</P>
+        <P>Przy nazwiskach w rankingu pojawiają się odznaki zdobyte w <b style={{ color:"#7dffb8" }}>ostatnim zakończonym sezonie</b>:</P>
         <Li ico="👑">Piłkarz Sezonu</Li>
         <Li ico="⚽">Król strzelców</Li>
         <Li ico="👟">Król asyst</Li>
@@ -929,12 +931,12 @@ function InfoView() {
 
       <div style={CARD}>
         <H>🧩 Zawodnicy spoza klasy</H>
-        <P>Random 1–4 możesz dodać do meczu i ocenić tak jak każdego. <b style={{ color:"#ffb088" }}>Nie liczą się</b> jednak do rankingu wartości, statystyk ani nagród sezonu — służą tylko do skompletowania składów.</P>
+        <P>Random 1–4 możesz dodać do meczu i ocenić tak jak każdego. <b style={{ color:"#7dffb8" }}>Nie liczą się</b> jednak do rankingu wartości, statystyk ani nagród sezonu — służą tylko do skompletowania składów.</P>
       </div>
 
       <div style={CARD}>
         <H>⏱️ Przebieg meczu</H>
-        <Li ico="🕐">Mecz to <b style={{ color:"#ffb088" }}>dwie połowy po {HALF_MIN} minut</b>. Przy golu możesz podać minutę i czas doliczony (np. 15+2).</Li>
+        <Li ico="🕐">Mecz to <b style={{ color:"#7dffb8" }}>dwie połowy po {HALF_MIN} minut</b>. Przy golu możesz podać minutę i czas doliczony (np. 15+2).</Li>
         <Li ico="🟰">Przy golach widać podział na 1. połowę, przerwę z wynikiem do przerwy, 2. połowę oraz ewentualną dogrywkę.</Li>
         <Li ico="🫵"><b>Rzuty karne</b> rozstrzygają zwycięzcę tylko przy remisie po regulaminowym czasie.</Li>
       </div>
@@ -962,7 +964,7 @@ function LineChart({ lines, bands, yFormat = (v) => String(v), height = 210 }) {
       ))}
       {ticks.map((t, i) => (
         <g key={"t" + i}>
-          <line x1={padL} x2={W - padR} y1={sy(t)} y2={sy(t)} stroke="#221640" strokeWidth="1" />
+          <line x1={padL} x2={W - padR} y1={sy(t)} y2={sy(t)} stroke="#1c2820" strokeWidth="1" />
           <text x={padL - 7} y={sy(t) + 3} textAnchor="end" fontSize="10" fill="#64748b">{yFormat(t)}</text>
         </g>
       ))}
@@ -977,7 +979,7 @@ function LineChart({ lines, bands, yFormat = (v) => String(v), height = 210 }) {
           </g>
         );
       })}
-      <line x1={padL} x2={W - padR} y1={H - padB} y2={H - padB} stroke="#3b1f5c" strokeWidth="1" />
+      <line x1={padL} x2={W - padR} y1={H - padB} y2={H - padB} stroke="#2a3d2f" strokeWidth="1" />
       <text x={padL} y={H - padB + 16} textAnchor="start" fontSize="10" fill="#475569">mecz {Math.round(minX)}</text>
       <text x={W - padR} y={H - padB + 16} textAnchor="end" fontSize="10" fill="#475569">mecz {Math.round(maxX)}</text>
     </svg>
@@ -1004,7 +1006,7 @@ function PlayerValueChart({ player, seasonNames }) {
   const seasonsShown = [...new Set(pts.map(p => p.season))].sort((a, b) => a - b);
   return (
     <div>
-      <LineChart lines={[{ name: player.name, color: "#ff6b35", pts }]} bands={bands} yFormat={(v) => fv(v)} />
+      <LineChart lines={[{ name: player.name, color: "#00ff85", pts }]} bands={bands} yFormat={(v) => fv(v)} />
       <div style={{ display:"flex", flexWrap:"wrap", gap:10, marginTop:6, justifyContent:"center" }}>
         {seasonsShown.map(s => (
           <span key={s} title={seasonNames?.[s] || `Sezon ${s}`} style={{ display:"flex", alignItems:"center", gap:4, fontSize:10, color:"#94a3b8" }}>
@@ -1036,7 +1038,7 @@ function CompareView({ players }) {
   const pb = players.find(p => p.id === b);
   const m = COMPARE_METRICS.find(x => x.id === metric) || COMPARE_METRICS[0];
   const lines = [];
-  if (pa) lines.push({ name: pa.name, color: "#ff6b35", pts: metricSeries(pa, metric) });
+  if (pa) lines.push({ name: pa.name, color: "#00ff85", pts: metricSeries(pa, metric) });
   if (pb) lines.push({ name: pb.name, color: "#00d9c0", pts: metricSeries(pb, metric) });
   const note = metric === "value" ? "Wartość liczona narastająco z całej historii."
     : metric === "avg" ? "Średnia ocen narastająco po kolejnych meczach."
@@ -1048,8 +1050,8 @@ function CompareView({ players }) {
       <div style={CARD}>
         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:12 }}>
           <div>
-            <div style={{ fontSize:10, color:"#ffb088", fontWeight:700, marginBottom:4 }}>● Zawodnik A</div>
-            <select value={a} onChange={e => setA(e.target.value)} style={{ ...INP, borderColor:"#7c2d12" }}>
+            <div style={{ fontSize:10, color:"#7dffb8", fontWeight:700, marginBottom:4 }}>● Zawodnik A</div>
+            <select value={a} onChange={e => setA(e.target.value)} style={{ ...INP, borderColor:"#15803d" }}>
               <option value="">— wybierz —</option>
               {real.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
@@ -1065,7 +1067,7 @@ function CompareView({ players }) {
         <div style={{ display:"flex", flexWrap:"wrap", gap:5, marginBottom:14 }}>
           {COMPARE_METRICS.map(mm => (
             <button key={mm.id} onClick={() => setMetric(mm.id)}
-              style={{ padding:"5px 11px", borderRadius:6, border:`1px solid ${metric===mm.id?"#ff6b35":"#3b1f5c"}`, background:metric===mm.id?"rgba(255,107,53,.2)":"transparent", color:metric===mm.id?"#ffb088":"#64748b", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+              style={{ padding:"5px 11px", borderRadius:6, border:`1px solid ${metric===mm.id?"#00ff85":"#2a3d2f"}`, background:metric===mm.id?"rgba(0,255,133,.2)":"transparent", color:metric===mm.id?"#7dffb8":"#64748b", fontSize:12, fontWeight:600, cursor:"pointer" }}>
               {mm.label}
             </button>
           ))}
@@ -1074,7 +1076,7 @@ function CompareView({ players }) {
           ? <LineChart lines={lines} yFormat={m.fmt} height={250} />
           : <div style={{ fontSize:12, color:"#475569", textAlign:"center", padding:"24px 0" }}>Wybierz zawodników, żeby porównać wykresy.</div>}
         <div style={{ display:"flex", justifyContent:"center", gap:18, marginTop:8, flexWrap:"wrap" }}>
-          {pa && <span style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:"#e2e8f0" }}><span style={{ width:11, height:11, borderRadius:3, background:"#ff6b35" }} />{pa.name}</span>}
+          {pa && <span style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:"#e2e8f0" }}><span style={{ width:11, height:11, borderRadius:3, background:"#00ff85" }} />{pa.name}</span>}
           {pb && <span style={{ display:"flex", alignItems:"center", gap:5, fontSize:12, color:"#e2e8f0" }}><span style={{ width:11, height:11, borderRadius:3, background:"#00d9c0" }} />{pb.name}</span>}
         </div>
         <div style={{ fontSize:10, color:"#475569", textAlign:"center", marginTop:8 }}>Oś X = kolejne mecze danego zawodnika. {note}</div>
@@ -1099,7 +1101,7 @@ function MainApp({ readOnly, onExit }) {
   const [lastSync, setLastSync] = useState(null);
   const lastTs = useRef(null);
 
-  function showToast(msg, col="#ff6b35") { setToast({ msg, col }); setTimeout(() => setToast(null), 2800); }
+  function showToast(msg, col="#00ff85") { setToast({ msg, col }); setTimeout(() => setToast(null), 2800); }
 
   async function saveToStorage(p, c, sn) {
     try {
@@ -1258,32 +1260,38 @@ function MainApp({ readOnly, onExit }) {
   const lca = getLastCompletedSeasonAwards(players);
   const matches = getMatches(players);
 
-  const navItems = readOnly
-    ? [["ranking","🏆"],["history","📅"],["stats","📊"],["compare","⚖️"],["seasons","👑"],["criteria","📋"],["info","ℹ️"]]
-    : [["ranking","🏆"],["history","📅"],["stats","📊"],["compare","⚖️"],["seasons","👑"],["add","➕"],["opinions","💬"],["criteria","📋"],["editor","⚙️"],["info","ℹ️"]];
+  // Główna nawigacja: tylko 5 najważniejszych sekcji, zawsze widoczne z podpisem.
+  // Rzadziej używane funkcje (Porównaj, Kryteria, Opinie, Edytor, Info) żyją w „Więcej”.
+  const navItems = [["ranking","🏆","Ranking"],["history","📅","Mecze"],["stats","📊","Statystyki"],["seasons","👑","Sezony"],["more","☰","Więcej"]];
+  const moreItems = readOnly
+    ? [["compare","⚖️","Porównaj zawodników","Zestaw dwóch graczy obok siebie"],["criteria","📋","Kryteria ocen","Zasady punktacji w meczu"],["info","ℹ️","O aplikacji","Jak działa system ocen i wyceny"]]
+    : [["compare","⚖️","Porównaj zawodników","Zestaw dwóch graczy obok siebie"],["opinions","💬","Opinie","Dodaj komentarz o zawodniku"],["criteria","📋","Kryteria ocen","Zasady punktacji w meczu"],["editor","⚙️","Edytor kryteriów","Zmień punktację i wagi"],["info","ℹ️","O aplikacji","Jak działa system ocen i wyceny"]];
 
   return (
     <div style={{ minHeight:"100vh", background:BG, color:"#e2e8f0", fontFamily:"'Inter',system-ui,sans-serif", paddingBottom:80 }}>
       {/* TOP BAR */}
-      <div style={{ background:"#150d2e", borderBottom:"1px solid #221640", padding:"12px 20px" }}>
+      <div style={{ background:"#0f1612", borderBottom:"1px solid #1c2820", padding:"12px 20px" }}>
         <div style={{ maxWidth:720, margin:"0 auto", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-          <div>
-            <div style={{ fontSize:18, fontWeight:900, letterSpacing:-0.5, background:"linear-gradient(135deg,#ff6b35,#ffb088 40%,#00d9c0)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>
-              🔥 WAKACJE FC
+          <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+            <span style={{ fontSize:11, fontWeight:900, letterSpacing:.5, background:"#00ff85", color:"#06150c", borderRadius:5, padding:"3px 6px", flexShrink:0 }}>FC</span>
+            <div>
+              <div style={{ fontSize:15, fontWeight:900, letterSpacing:-0.3, color:"#e7f5ec", lineHeight:1.1 }}>
+                PIĘKNI <span style={{ color:"#00ff85" }}>I</span> MŁODZI
+              </div>
+              <div style={{ fontSize:9, color:"#3f5c4a" }}>sync: {lastSync||"—"}</div>
             </div>
-            <div style={{ fontSize:10, color:"#334155" }}>sync: {lastSync||"—"}</div>
           </div>
           <div style={{ display:"flex", alignItems:"center", gap:8 }}>
-            <span style={{ fontSize:10, fontWeight:700, color:readOnly?"#7ef5e5":"#ffb088", border:`1px solid ${readOnly?"#0e7490":"#7c2d12"}`, borderRadius:6, padding:"4px 9px" }}>
+            <span style={{ fontSize:10, fontWeight:700, color:readOnly?"#7ef5e5":"#7dffb8", border:`1px solid ${readOnly?"#0e7490":"#15803d"}`, borderRadius:6, padding:"4px 9px" }}>
               {readOnly?"👁️ Widz":"🛠️ Admin"}
             </span>
             {!readOnly && (
-              <button onClick={() => saveToStorage(players, criteria)} style={{ background:"linear-gradient(135deg,#ff6b35,#e0289d)", border:"none", borderRadius:8, color:"#fff", padding:"8px 14px", fontSize:12, fontWeight:700, cursor:"pointer" }}>
-                💾 Zapisz
+              <button onClick={() => saveToStorage(players, criteria)} title="Zapisz" style={{ background:"linear-gradient(135deg,#16a34a,#00ff85)", border:"none", borderRadius:8, color:"#06150c", padding:"8px 11px", fontSize:14, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center" }}>
+                💾
               </button>
             )}
-            <button onClick={onExit} style={{ background:"transparent", border:"1px solid #3b1f5c", borderRadius:8, color:"#94a3b8", padding:"8px 10px", fontSize:11, fontWeight:600, cursor:"pointer" }}>
-              Zmień tryb
+            <button onClick={onExit} title="Zmień tryb" style={{ background:"transparent", border:"1px solid #2a3d2f", borderRadius:8, color:"#94a3b8", padding:"8px 10px", fontSize:13, cursor:"pointer", display:"flex", alignItems:"center" }}>
+              ↩
             </button>
           </div>
         </div>
@@ -1291,6 +1299,12 @@ function MainApp({ readOnly, onExit }) {
 
       <div style={{ maxWidth:720, margin:"0 auto", padding:"0 16px" }}>
         {toast && <div style={{ background:toast.col, borderRadius:8, padding:"10px 16px", marginTop:14, fontSize:13, fontWeight:600 }}>{toast.msg}</div>}
+
+        {["compare","opinions","criteria","editor","info"].includes(view) && (
+          <button onClick={() => setView("more")} style={{ display:"flex", alignItems:"center", gap:5, background:"transparent", border:"none", color:"#4a6b56", fontSize:12, fontWeight:700, cursor:"pointer", padding:"14px 0 0", marginBottom:-6 }}>
+            ‹ Więcej
+          </button>
+        )}
 
         {/* RANKING */}
         {view==="ranking" && (
@@ -1307,8 +1321,8 @@ function MainApp({ readOnly, onExit }) {
               return (
                 <div key={p.id} style={{ marginBottom:8 }}>
                   <div onClick={() => setExpanded(isOpen ? null : p.id)}
-                    style={{ background:"#150d2e", border:`1px solid ${isOpen?"#ff6b35":"#221640"}`, borderRadius: isOpen?"10px 10px 0 0":10, padding:"13px 16px", cursor:"pointer", display:"flex", alignItems:"center", gap:14 }}>
-                    <div style={{ width:26, textAlign:"center", fontWeight:900, fontSize:15, color:i<3?["#fbbf24","#c9a8e0","#b45309"][i]:"#3b1f5c" }}>#{i+1}</div>
+                    style={{ background:"#0f1612", border:`1px solid ${isOpen?"#00ff85":"#1c2820"}`, borderRadius: isOpen?"10px 10px 0 0":10, padding:"13px 16px", cursor:"pointer", display:"flex", alignItems:"center", gap:14 }}>
+                    <div style={{ width:26, textAlign:"center", fontWeight:900, fontSize:15, color:i<3?["#fbbf24","#a8c9b0","#b45309"][i]:"#2a3d2f" }}>#{i+1}</div>
                     <div style={{ flex:1 }}>
                       <div style={{ fontWeight:700, fontSize:14, color:"#e2e8f0", display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
                         <span>{p.name} <span style={{ fontSize:11, color:"#334155", fontWeight:400 }}>· {p.position}</span></span>
@@ -1319,7 +1333,7 @@ function MainApp({ readOnly, onExit }) {
                       <div style={{ fontSize:11, color:"#334155", marginTop:1 }}>{p.matches.length} meczów · kliknij po wykres</div>
                     </div>
                     <div style={{ textAlign:"right" }}>
-                      <div style={{ fontSize:22, fontWeight:900, color:avg?rc(avg):"#3b1f5c", lineHeight:1 }}>
+                      <div style={{ fontSize:22, fontWeight:900, color:avg?rc(avg):"#2a3d2f", lineHeight:1 }}>
                         {avg?avg.toFixed(2):"—"}
                         <span style={{ fontSize:11, marginLeft:3, color:trend==="▲"?"#22c55e":trend==="▼"?"#ef4444":"#334155" }}>{trend}</span>
                       </div>
@@ -1327,14 +1341,14 @@ function MainApp({ readOnly, onExit }) {
                       <div style={{ fontSize:13, fontWeight:700, color:"#e2e8f0" }}>{fv(val)}</div>
                       <div style={{ fontSize:10, color:chg>=0?"#22c55e":"#ef4444" }}>{chg>=0?"+":""}{fv(Math.abs(chg))}</div>
                     </div>
-                    <div style={{ width:12, textAlign:"center", color:isOpen?"#ff6b35":"#475569", fontSize:11 }}>{isOpen?"▲":"▼"}</div>
+                    <div style={{ width:12, textAlign:"center", color:isOpen?"#00ff85":"#475569", fontSize:11 }}>{isOpen?"▲":"▼"}</div>
                   </div>
                   {isOpen && (
-                    <div style={{ background:"#0c0a1d", border:"1px solid #ff6b35", borderTop:"none", borderRadius:"0 0 10px 10px", padding:"14px 14px 12px" }}>
+                    <div style={{ background:"#070a08", border:"1px solid #00ff85", borderTop:"none", borderRadius:"0 0 10px 10px", padding:"14px 14px 12px" }}>
                       <div style={{ fontSize:10, color:"#64748b", marginBottom:8, letterSpacing:.5 }}>📈 WYKRES WYCENY · CAŁA HISTORIA</div>
                       <PlayerValueChart player={p} seasonNames={seasonNames} />
                       <button onClick={(e) => { e.stopPropagation(); setSelP(p.id); setView("player"); }}
-                        style={{ width:"100%", marginTop:10, padding:"9px", background:"transparent", border:"1px solid #3b1f5c", borderRadius:8, color:"#ffb088", fontSize:12, fontWeight:600, cursor:"pointer" }}>
+                        style={{ width:"100%", marginTop:10, padding:"9px", background:"transparent", border:"1px solid #2a3d2f", borderRadius:8, color:"#7dffb8", fontSize:12, fontWeight:600, cursor:"pointer" }}>
                         Pełna karta zawodnika →
                       </button>
                     </div>
@@ -1364,7 +1378,7 @@ function MainApp({ readOnly, onExit }) {
           const real = players.filter(p => !p.random);
           const sumC = (player, ...ids) => (player.matches||[]).reduce((t,m) => t + ids.reduce((s,id) => s + parseInt((m.criteria||{})[id]||0), 0), 0);
           const boards = [
-            { title:"Strzelcy", emoji:"⚽", col:"#ff6b35", unit:"goli", data:real.map(p => ({ name:p.name, pos:p.position, n:sumC(p,"goal","header","freekick","screamer") })).sort((a,b) => b.n-a.n).filter(x => x.n>0) },
+            { title:"Strzelcy", emoji:"⚽", col:"#00ff85", unit:"goli", data:real.map(p => ({ name:p.name, pos:p.position, n:sumC(p,"goal","header","freekick","screamer") })).sort((a,b) => b.n-a.n).filter(x => x.n>0) },
             { title:"Asystenci", emoji:"🎯", col:"#14b8a6", unit:"asyst", data:real.map(p => ({ name:p.name, pos:p.position, n:sumC(p,"assist") })).sort((a,b) => b.n-a.n).filter(x => x.n>0) },
             { title:"Bengery", emoji:"🚀", col:"#f97316", unit:"szt.", data:real.map(p => ({ name:p.name, pos:p.position, n:sumC(p,"screamer") })).sort((a,b) => b.n-a.n).filter(x => x.n>0) },
             { title:"Siatkówki", emoji:"🍑", col:"#a855f7", unit:"szt.", data:real.map(p => ({ name:p.name, pos:p.position, n:sumC(p,"nutmeg") })).sort((a,b) => b.n-a.n).filter(x => x.n>0) },
@@ -1388,7 +1402,7 @@ function MainApp({ readOnly, onExit }) {
                             </div>
                             <span style={{ fontWeight:900, fontSize:15, color:b.col }}>{row.n} <span style={{ fontSize:11, color:"#475569", fontWeight:400 }}>{b.unit}</span></span>
                           </div>
-                          <div style={{ height:5, background:"#221640", borderRadius:3, overflow:"hidden" }}>
+                          <div style={{ height:5, background:"#1c2820", borderRadius:3, overflow:"hidden" }}>
                             <div style={{ height:"100%", width:`${pct}%`, background:b.col, borderRadius:3 }} />
                           </div>
                         </div>
@@ -1399,18 +1413,18 @@ function MainApp({ readOnly, onExit }) {
               <div style={{ fontSize:11, color:"#334155", marginBottom:10, letterSpacing:.5 }}>KARTY ZAWODNIKÓW</div>
               {real.filter(p => p.matches.length>0).sort((a,b) => sumC(b,"goal","screamer","freekick","header")-sumC(a,"goal","screamer","freekick","header")).map(p => {
                 const avg = getAvgRating(p.matches);
-                const stats = [["⚽",sumC(p,"goal","header","freekick","screamer"),"Gole","#ff6b35"],["🎯",sumC(p,"assist"),"Asysty","#14b8a6"],["🚀",sumC(p,"screamer"),"Bengery","#f97316"],["🍑",sumC(p,"nutmeg"),"Siatk.","#a855f7"],["🔥",sumC(p,"clutch"),"Clutch","#fbbf24"],["🤦",sumC(p,"miss","penalty_miss"),"Pudła","#ef4444"],["😬",sumC(p,"own_goal"),"Samob.","#b91c1c"],["💀",sumC(p,"lost_ball_danger"),"Straty","#ef4444"]];
+                const stats = [["⚽",sumC(p,"goal","header","freekick","screamer"),"Gole","#00ff85"],["🎯",sumC(p,"assist"),"Asysty","#14b8a6"],["🚀",sumC(p,"screamer"),"Bengery","#f97316"],["🍑",sumC(p,"nutmeg"),"Siatk.","#a855f7"],["🔥",sumC(p,"clutch"),"Clutch","#fbbf24"],["🤦",sumC(p,"miss","penalty_miss"),"Pudła","#ef4444"],["😬",sumC(p,"own_goal"),"Samob.","#b91c1c"],["💀",sumC(p,"lost_ball_danger"),"Straty","#ef4444"]];
                 return (
-                  <div key={p.id} style={{ background:"#150d2e", border:"1px solid #221640", borderRadius:10, padding:"13px 14px", marginBottom:8 }}>
+                  <div key={p.id} style={{ background:"#0f1612", border:"1px solid #1c2820", borderRadius:10, padding:"13px 14px", marginBottom:8 }}>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
                       <div><span style={{ fontWeight:800, fontSize:14, color:"#e2e8f0" }}>{p.name}</span><span style={{ fontSize:11, color:"#334155", marginLeft:6 }}>{p.position} · {p.matches.length}M</span></div>
-                      <span style={{ fontSize:18, fontWeight:900, color:avg?rc(avg):"#3b1f5c" }}>{avg?avg.toFixed(2):"—"}</span>
+                      <span style={{ fontSize:18, fontWeight:900, color:avg?rc(avg):"#2a3d2f" }}>{avg?avg.toFixed(2):"—"}</span>
                     </div>
                     <div style={{ display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:6 }}>
                       {stats.map(([ico,val,label,col]) => (
-                        <div key={label} style={{ background:"#0c0a1d", borderRadius:7, padding:"7px 8px", textAlign:"center" }}>
+                        <div key={label} style={{ background:"#070a08", borderRadius:7, padding:"7px 8px", textAlign:"center" }}>
                           <div style={{ fontSize:14 }}>{ico}</div>
-                          <div style={{ fontWeight:900, fontSize:17, color:val>0?col:"#3b1f5c", lineHeight:1.1 }}>{val}</div>
+                          <div style={{ fontWeight:900, fontSize:17, color:val>0?col:"#2a3d2f", lineHeight:1.1 }}>{val}</div>
                           <div style={{ fontSize:9, color:"#334155", marginTop:2 }}>{label}</div>
                         </div>
                       ))}
@@ -1425,6 +1439,22 @@ function MainApp({ readOnly, onExit }) {
         {/* SEZONY */}
         {view==="seasons" && <SeasonsView players={players} criteria={criteria} seasonNames={seasonNames} readOnly={readOnly} onRename={setSeasonName} />}
 
+        {/* WIĘCEJ — siatka kafelków z resztą funkcji */}
+        {view==="more" && (
+          <div style={{ marginTop:20 }}>
+            <div style={LABEL}>WIĘCEJ FUNKCJI</div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+              {moreItems.map(([v,icon,title,desc]) => (
+                <button key={v} onClick={() => setView(v)} style={{ ...CARD, margin:0, textAlign:"left", cursor:"pointer", display:"flex", flexDirection:"column", gap:6 }}>
+                  <span style={{ fontSize:22 }}>{icon}</span>
+                  <span style={{ fontSize:13, fontWeight:800, color:"#e7f5ec" }}>{title}</span>
+                  <span style={{ fontSize:11, color:"#4a6b56", lineHeight:1.3 }}>{desc}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* PORÓWNANIE */}
         {view==="compare" && <CompareView players={players} />}
 
@@ -1438,7 +1468,7 @@ function MainApp({ readOnly, onExit }) {
               <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginTop:16 }}>
                 <div style={LABEL}>EDYCJA MECZU</div>
                 <button onClick={() => { setWiz(EMPTY_WIZ()); setView("history"); }}
-                  style={{ background:"transparent", border:"1px solid #3b1f5c", borderRadius:7, color:"#64748b", fontSize:11, padding:"5px 10px", cursor:"pointer" }}>
+                  style={{ background:"transparent", border:"1px solid #2a3d2f", borderRadius:7, color:"#64748b", fontSize:11, padding:"5px 10px", cursor:"pointer" }}>
                   ✕ Anuluj edycję
                 </button>
               </div>
@@ -1460,13 +1490,13 @@ function MainApp({ readOnly, onExit }) {
               <div style={{ display:"flex", gap:6, marginBottom:12 }}>
                 {[["positive","👍","#22c55e"],["neutral","😐","#64748b"],["negative","👎","#ef4444"]].map(([s,e,c]) => (
                   <button key={s} onClick={() => setOpForm(f => ({ ...f, sentiment:s }))}
-                    style={{ flex:1, padding:"8px", borderRadius:6, border:`1px solid ${opForm.sentiment===s?c:"#3b1f5c"}`, background:opForm.sentiment===s?c+"22":"transparent", color:opForm.sentiment===s?c:"#475569", fontSize:13, fontWeight:600, cursor:"pointer" }}>
+                    style={{ flex:1, padding:"8px", borderRadius:6, border:`1px solid ${opForm.sentiment===s?c:"#2a3d2f"}`, background:opForm.sentiment===s?c+"22":"transparent", color:opForm.sentiment===s?c:"#475569", fontSize:13, fontWeight:600, cursor:"pointer" }}>
                     {e}
                   </button>
                 ))}
               </div>
               <textarea value={opForm.text} onChange={e => setOpForm(f => ({ ...f, text:e.target.value }))} placeholder="Co klasa uważa?" rows={3} style={{ ...INP, resize:"vertical", marginBottom:12 }} />
-              <button onClick={addOpinion} style={{ width:"100%", padding:"11px", background:"#ff6b35", border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>Dodaj opinię</button>
+              <button onClick={addOpinion} style={{ width:"100%", padding:"11px", background:"#00ff85", border:"none", borderRadius:8, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>Dodaj opinię</button>
             </div>
           </div>
         )}
@@ -1477,12 +1507,12 @@ function MainApp({ readOnly, onExit }) {
             <div style={LABEL}>KRYTERIA OCENIANIA · start: {BASE_RATING}</div>
             {["pos","gk_pos","neg","gk_neg"].map(cat => (
               <div key={cat} style={{ marginBottom:18 }}>
-                <div style={{ fontSize:10, fontWeight:700, color:cat.includes("neg")?"#ef4444":"#ff6b35", marginBottom:8, letterSpacing:.8, textTransform:"uppercase" }}>{CAT_LABELS[cat]}</div>
+                <div style={{ fontSize:10, fontWeight:700, color:cat.includes("neg")?"#ef4444":"#00ff85", marginBottom:8, letterSpacing:.8, textTransform:"uppercase" }}>{CAT_LABELS[cat]}</div>
                 {criteria.filter(c => c.cat===cat).map(c => (
-                  <div key={c.id} style={{ background:"#150d2e", border:"1px solid #221640", borderRadius:7, padding:"10px 13px", marginBottom:5, display:"flex", alignItems:"center", gap:10 }}>
+                  <div key={c.id} style={{ background:"#0f1612", border:"1px solid #1c2820", borderRadius:7, padding:"10px 13px", marginBottom:5, display:"flex", alignItems:"center", gap:10 }}>
                     <div style={{ fontSize:18, width:26 }}>{c.label.split(" ")[0]}</div>
-                    <div style={{ flex:1 }}><div style={{ fontWeight:600, fontSize:12, color:"#e8d5f5" }}>{c.label.split(" ").slice(1).join(" ")}</div><div style={{ fontSize:10, color:"#334155", marginTop:1 }}>{c.desc}</div></div>
-                    <div style={{ fontWeight:800, fontSize:14, color:c.points>0?"#ff6b35":"#ef4444" }}>{c.points>0?"+":""}{c.points}</div>
+                    <div style={{ flex:1 }}><div style={{ fontWeight:600, fontSize:12, color:"#d4f5dc" }}>{c.label.split(" ").slice(1).join(" ")}</div><div style={{ fontSize:10, color:"#334155", marginTop:1 }}>{c.desc}</div></div>
+                    <div style={{ fontWeight:800, fontSize:14, color:c.points>0?"#00ff85":"#ef4444" }}>{c.points>0?"+":""}{c.points}</div>
                   </div>
                 ))}
               </div>
@@ -1494,8 +1524,8 @@ function MainApp({ readOnly, onExit }) {
         {view==="editor" && !readOnly && (
           <div style={{ marginTop:20 }}>
             <div style={LABEL}>EDYTOR KRYTERIÓW</div>
-            <div style={{ background:"#150d2e", border:"1px solid #ff6b35", borderRadius:12, padding:18, marginBottom:18 }}>
-              <div style={{ fontSize:13, fontWeight:700, color:"#ffb088", marginBottom:12 }}>➕ Nowe kryterium</div>
+            <div style={{ background:"#0f1612", border:"1px solid #00ff85", borderRadius:12, padding:18, marginBottom:18 }}>
+              <div style={{ fontSize:13, fontWeight:700, color:"#7dffb8", marginBottom:12 }}>➕ Nowe kryterium</div>
               <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:8, marginBottom:8 }}>
                 <div><label style={{ fontSize:11, color:"#64748b", display:"block", marginBottom:3 }}>Nazwa</label><input value={newCrit.label} onChange={e => setNewCrit(f => ({ ...f, label:e.target.value }))} placeholder="🌟 Nazwa" style={INP} /></div>
                 <div><label style={{ fontSize:11, color:"#64748b", display:"block", marginBottom:3 }}>Punkty</label><input value={newCrit.points} onChange={e => setNewCrit(f => ({ ...f, points:e.target.value }))} placeholder="0.30" style={INP} /></div>
@@ -1505,34 +1535,34 @@ function MainApp({ readOnly, onExit }) {
               <div style={{ display:"flex", gap:5, flexWrap:"wrap", marginBottom:12 }}>
                 {Object.entries({ pos:"⚽+", gk_pos:"🧤+", neg:"🔴−", gk_neg:"🔴BR−" }).map(([k,l]) => (
                   <button key={k} onClick={() => setNewCrit(f => ({ ...f, cat:k }))}
-                    style={{ padding:"5px 10px", borderRadius:5, border:`1px solid ${newCrit.cat===k?"#ff6b35":"#3b1f5c"}`, background:newCrit.cat===k?"rgba(255,107,53,.2)":"transparent", color:newCrit.cat===k?"#ffb088":"#475569", fontSize:12, cursor:"pointer" }}>{l}</button>
+                    style={{ padding:"5px 10px", borderRadius:5, border:`1px solid ${newCrit.cat===k?"#00ff85":"#2a3d2f"}`, background:newCrit.cat===k?"rgba(0,255,133,.2)":"transparent", color:newCrit.cat===k?"#7dffb8":"#475569", fontSize:12, cursor:"pointer" }}>{l}</button>
                 ))}
               </div>
               <button onClick={() => { if (!newCrit.label.trim()) return; const pts = parseFloat(newCrit.points); if (isNaN(pts)) return; const nc = [...criteria, { id:"c_"+Date.now(), label:newCrit.label.trim(), desc:newCrit.desc.trim()||"—", points:pts, cat:newCrit.cat }]; commit(undefined, nc); setNewCrit({ label:"", desc:"", points:"0.20", cat:"pos" }); showToast("✅ Dodano!"); }}
-                style={{ width:"100%", padding:"10px", background:"#ff6b35", border:"none", borderRadius:7, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>Dodaj kryterium</button>
+                style={{ width:"100%", padding:"10px", background:"#00ff85", border:"none", borderRadius:7, color:"#fff", fontSize:13, fontWeight:700, cursor:"pointer" }}>Dodaj kryterium</button>
             </div>
             {["pos","gk_pos","neg","gk_neg"].map(cat => (
               <div key={cat} style={{ marginBottom:16 }}>
-                <div style={{ fontSize:10, fontWeight:700, color:cat.includes("neg")?"#ef4444":"#ff6b35", marginBottom:7, letterSpacing:.8, textTransform:"uppercase" }}>{CAT_LABELS[cat]}</div>
+                <div style={{ fontSize:10, fontWeight:700, color:cat.includes("neg")?"#ef4444":"#00ff85", marginBottom:7, letterSpacing:.8, textTransform:"uppercase" }}>{CAT_LABELS[cat]}</div>
                 {criteria.filter(c => c.cat===cat).map(c => (
-                  <div key={c.id} style={{ background:"#150d2e", border:"1px solid #221640", borderRadius:7, padding:"9px 13px", marginBottom:5 }}>
+                  <div key={c.id} style={{ background:"#0f1612", border:"1px solid #1c2820", borderRadius:7, padding:"9px 13px", marginBottom:5 }}>
                     {editCrit?.id===c.id ? (
                       <div>
                         <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6, marginBottom:6 }}>
-                          <input value={editCrit.label} onChange={e => setEditCrit(f => ({ ...f, label:e.target.value }))} style={{ ...INP, fontSize:12, padding:"5px 8px", border:"1px solid #ff6b35" }} />
-                          <input value={editCrit.points} onChange={e => setEditCrit(f => ({ ...f, points:e.target.value }))} style={{ ...INP, fontSize:12, padding:"5px 8px", border:"1px solid #ff6b35" }} />
+                          <input value={editCrit.label} onChange={e => setEditCrit(f => ({ ...f, label:e.target.value }))} style={{ ...INP, fontSize:12, padding:"5px 8px", border:"1px solid #00ff85" }} />
+                          <input value={editCrit.points} onChange={e => setEditCrit(f => ({ ...f, points:e.target.value }))} style={{ ...INP, fontSize:12, padding:"5px 8px", border:"1px solid #00ff85" }} />
                         </div>
                         <input value={editCrit.desc} onChange={e => setEditCrit(f => ({ ...f, desc:e.target.value }))} style={{ ...INP, fontSize:12, padding:"5px 8px", marginBottom:7 }} />
                         <div style={{ display:"flex", gap:6 }}>
-                          <button onClick={() => { const pts = parseFloat(editCrit.points); if (isNaN(pts)) return; const nc = criteria.map(x => x.id===c.id ? { ...editCrit, points:pts } : x); commit(undefined, nc); setEditCrit(null); showToast("✅ Zapisano!"); }} style={{ flex:1, padding:"6px", background:"#ff6b35", border:"none", borderRadius:5, color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}>Zapisz</button>
-                          <button onClick={() => setEditCrit(null)} style={{ padding:"6px 12px", background:"transparent", border:"1px solid #3b1f5c", borderRadius:5, color:"#64748b", fontSize:12, cursor:"pointer" }}>Anuluj</button>
+                          <button onClick={() => { const pts = parseFloat(editCrit.points); if (isNaN(pts)) return; const nc = criteria.map(x => x.id===c.id ? { ...editCrit, points:pts } : x); commit(undefined, nc); setEditCrit(null); showToast("✅ Zapisano!"); }} style={{ flex:1, padding:"6px", background:"#00ff85", border:"none", borderRadius:5, color:"#fff", fontSize:12, fontWeight:700, cursor:"pointer" }}>Zapisz</button>
+                          <button onClick={() => setEditCrit(null)} style={{ padding:"6px 12px", background:"transparent", border:"1px solid #2a3d2f", borderRadius:5, color:"#64748b", fontSize:12, cursor:"pointer" }}>Anuluj</button>
                         </div>
                       </div>
                     ) : (
                       <div style={{ display:"flex", alignItems:"center", gap:8 }}>
                         <div style={{ fontSize:17, width:24 }}>{c.label.split(" ")[0]}</div>
-                        <div style={{ flex:1 }}><div style={{ fontWeight:600, fontSize:12, color:"#e8d5f5" }}>{c.label.split(" ").slice(1).join(" ")}</div><div style={{ fontSize:10, color:"#334155" }}>{c.desc}</div></div>
-                        <div style={{ fontWeight:800, fontSize:13, color:c.points>0?"#ff6b35":"#ef4444", marginRight:6 }}>{c.points>0?"+":""}{c.points}</div>
+                        <div style={{ flex:1 }}><div style={{ fontWeight:600, fontSize:12, color:"#d4f5dc" }}>{c.label.split(" ").slice(1).join(" ")}</div><div style={{ fontSize:10, color:"#334155" }}>{c.desc}</div></div>
+                        <div style={{ fontWeight:800, fontSize:13, color:c.points>0?"#00ff85":"#ef4444", marginRight:6 }}>{c.points>0?"+":""}{c.points}</div>
                         <button onClick={() => setEditCrit({ ...c, points:String(c.points) })} style={{ background:"none", border:"none", color:"#475569", cursor:"pointer", fontSize:13, padding:"2px 5px" }}>✏️</button>
                         <button onClick={() => { if (window.confirm(`Usunąć "${c.label}"?`)) { const nc = criteria.filter(x => x.id!==c.id); commit(undefined, nc); showToast("🗑️ Usunięto"); } }} style={{ background:"none", border:"none", color:"#ef4444", cursor:"pointer", fontSize:13, padding:"2px 5px" }}>🗑️</button>
                       </div>
@@ -1552,7 +1582,7 @@ function MainApp({ readOnly, onExit }) {
           const mwv = matchByMatchWalk(p);
           return (
             <div style={{ marginTop:16 }}>
-              <button onClick={() => setView("ranking")} style={{ background:"none", border:"none", color:"#ff6b35", cursor:"pointer", fontSize:13, marginBottom:12, padding:0 }}>← Ranking</button>
+              <button onClick={() => setView("ranking")} style={{ background:"none", border:"none", color:"#00ff85", cursor:"pointer", fontSize:13, marginBottom:12, padding:0 }}>← Ranking</button>
               <div style={CARD}>
                 <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
                   <div>
@@ -1568,7 +1598,7 @@ function MainApp({ readOnly, onExit }) {
                     </div>
                   </div>
                   <div style={{ textAlign:"right" }}>
-                    <div style={{ fontSize:30, fontWeight:900, color:avg?rc(avg):"#3b1f5c", lineHeight:1 }}>{avg?avg.toFixed(2):"—"}</div>
+                    <div style={{ fontSize:30, fontWeight:900, color:avg?rc(avg):"#2a3d2f", lineHeight:1 }}>{avg?avg.toFixed(2):"—"}</div>
                     <div style={{ fontSize:14, fontWeight:700, color:"#e2e8f0", marginTop:2 }}>{fv(val)}</div>
                     <div style={{ fontSize:11, color:chg>=0?"#22c55e":"#ef4444" }}>{chg>=0?"+":""}{fv(Math.abs(chg))} vs baza</div>
                   </div>
@@ -1597,7 +1627,7 @@ function MainApp({ readOnly, onExit }) {
                       const rangeTxt = range.start ? `${fmtPL(range.start)} – ${fmtPL(range.end)}` : `do ${fmtPL(range.end)}`;
                       return (
                         <div key={g.idx} style={{ marginBottom:14 }}>
-                          <div style={{ display:"flex", alignItems:"center", gap:7, padding:"6px 4px", marginBottom:2, borderBottom:"1px solid #2a1d4d" }}>
+                          <div style={{ display:"flex", alignItems:"center", gap:7, padding:"6px 4px", marginBottom:2, borderBottom:"1px solid #2a3d2f" }}>
                             <span style={{ width:8, height:8, borderRadius:2, background:seasonColor(g.idx), flexShrink:0 }} />
                             <span style={{ fontSize:12, fontWeight:800, color:"#e2e8f0" }}>{seasonNames?.[g.idx] || `Sezon ${g.idx}`}</span>
                             <span style={{ fontSize:10, color:"#475569" }}>{rangeTxt}</span>
@@ -1614,7 +1644,7 @@ function MainApp({ readOnly, onExit }) {
                   <div style={{ fontSize:11, fontWeight:700, color:"#334155", marginBottom:10, letterSpacing:.5 }}>OPINIE</div>
                   {p.opinions.map((o,i) => (
                     <div key={i} style={{ borderLeft:`3px solid ${o.sentiment==="positive"?"#22c55e":o.sentiment==="negative"?"#ef4444":"#334155"}`, paddingLeft:10, marginBottom:8 }}>
-                      <div style={{ fontSize:12, color:"#c9a8e0" }}>{o.text}</div>
+                      <div style={{ fontSize:12, color:"#a8c9b0" }}>{o.text}</div>
                       <div style={{ fontSize:10, color:"#334155", marginTop:1 }}>{fmtPL(o.date)}</div>
                     </div>
                   ))}
@@ -1626,16 +1656,32 @@ function MainApp({ readOnly, onExit }) {
       </div>
 
       {/* DOLNA NAWIGACJA */}
-      <div style={{ position:"fixed", bottom:0, left:0, right:0, background:"#150d2e", borderTop:"1px solid #221640", display:"flex", justifyContent:"center", padding:"8px 0" }}>
-        <div style={{ display:"flex", gap:2, maxWidth:720, width:"100%", padding:"0 8px", overflowX:"auto" }}>
-          {navItems.map(([v,icon]) => (
-            <button key={v} onClick={() => { if (v==="add") setWiz(EMPTY_WIZ()); setView(v); }}
-              style={{ flex:"1 0 auto", minWidth:38, padding:"8px 4px", background:view===v?"rgba(255,107,53,.15)":"transparent", border:`1px solid ${view===v?"#ff6b35":"transparent"}`, borderRadius:8, color:view===v?"#ffb088":"#334155", fontSize:18, cursor:"pointer", display:"flex", alignItems:"center", justifyContent:"center" }}>
-              {icon}
-            </button>
-          ))}
+      <div style={{ position:"fixed", bottom:0, left:0, right:0, background:"#0f1612", borderTop:"1px solid #1c2820", display:"flex", justifyContent:"center", padding:"6px 0", paddingBottom:"calc(6px + env(safe-area-inset-bottom))" }}>
+        <div style={{ display:"flex", maxWidth:720, width:"100%", padding:"0 4px" }}>
+          {navItems.map(([v,icon,label]) => {
+            const isMoreSub = v==="more" && ["compare","opinions","criteria","editor","info"].includes(view);
+            const active = view===v || isMoreSub;
+            return (
+              <button key={v} onClick={() => setView(v)}
+                style={{ flex:1, padding:"7px 2px", background:"transparent", border:"none", color:active?"#00ff85":"#4a6b56", fontSize:19, cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:2 }}>
+                <span style={{ lineHeight:1 }}>{icon}</span>
+                <span style={{ fontSize:9, fontWeight:active?800:600, letterSpacing:.2 }}>{label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
+
+      {/* FAB — dodaj mecz (admin), zawsze pod ręką niezależnie od aktywnej zakładki */}
+      {!readOnly && view!=="add" && (
+        <button onClick={() => { setWiz(EMPTY_WIZ()); setView("add"); }} title="Dodaj mecz"
+          style={{ position:"fixed", right:18, bottom:74, width:54, height:54, borderRadius:"50%",
+            background:"linear-gradient(135deg,#16a34a,#00ff85)", border:"none", color:"#06150c",
+            fontSize:26, fontWeight:900, cursor:"pointer", boxShadow:"0 4px 16px rgba(0,255,133,.35)",
+            display:"flex", alignItems:"center", justifyContent:"center", zIndex:20 }}>
+          ➕
+        </button>
+      )}
     </div>
   );
 }
@@ -1649,16 +1695,21 @@ function ModeSelect({ onChoose }) {
   return (
     <div style={{ minHeight:"100vh", background:BG, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Inter',system-ui,sans-serif", padding:20 }}>
       <div style={{ maxWidth:360, width:"100%", textAlign:"center" }}>
-        <div style={{ fontSize:48, marginBottom:14 }}>🔥⚽</div>
-        <div style={{ fontSize:26, fontWeight:900, marginBottom:6, background:"linear-gradient(135deg,#ff6b35,#ffb088 40%,#00d9c0)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent" }}>WAKACJE FC</div>
-        <div style={{ fontSize:13, color:"#c9a8e0", marginBottom:28 }}>Wybierz tryb</div>
+        <div style={{ display:"inline-flex", alignItems:"center", gap:10, marginBottom:18 }}>
+          <span style={{ fontSize:15, fontWeight:900, letterSpacing:.5, background:"#00ff85", color:"#06150c", borderRadius:7, padding:"6px 10px" }}>FC</span>
+          <span style={{ fontSize:34 }}>⚽</span>
+        </div>
+        <div style={{ fontSize:24, fontWeight:900, marginBottom:6, color:"#e7f5ec", letterSpacing:-0.3 }}>
+          PIĘKNI <span style={{ color:"#00ff85" }}>I</span> MŁODZI
+        </div>
+        <div style={{ fontSize:13, color:"#a8c9b0", marginBottom:28 }}>Wybierz tryb</div>
         <button onClick={() => onChoose("viewer")}
-          style={{ width:"100%", padding:"16px", marginBottom:12, background:"#150d2e", border:"1px solid #0e7490", borderRadius:12, color:"#7ef5e5", fontSize:15, fontWeight:800, cursor:"pointer", textAlign:"left" }}>
+          style={{ width:"100%", padding:"16px", marginBottom:12, background:"#0f1612", border:"1px solid #0e7490", borderRadius:12, color:"#7ef5e5", fontSize:15, fontWeight:800, cursor:"pointer", textAlign:"left" }}>
           👁️ Widz
           <div style={{ fontSize:11, color:"#64748b", fontWeight:400, marginTop:3 }}>Podgląd rankingu, meczów i sezonów. Bez hasła.</div>
         </button>
         <button onClick={() => onChoose("admin")}
-          style={{ width:"100%", padding:"16px", background:"#150d2e", border:"1px solid #7c2d12", borderRadius:12, color:"#ffb088", fontSize:15, fontWeight:800, cursor:"pointer", textAlign:"left" }}>
+          style={{ width:"100%", padding:"16px", background:"#0f1612", border:"1px solid #15803d", borderRadius:12, color:"#7dffb8", fontSize:15, fontWeight:800, cursor:"pointer", textAlign:"left" }}>
           🛠️ Administrator
           <div style={{ fontSize:11, color:"#64748b", fontWeight:400, marginTop:3 }}>Dodawanie meczów i ocen. Wymaga hasła.</div>
         </button>
@@ -1675,13 +1726,13 @@ function AdminGate({ onSuccess, onBack }) {
     <div style={{ minHeight:"100vh", background:BG, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Inter',system-ui,sans-serif", padding:20 }}>
       <div style={{ maxWidth:340, width:"100%", textAlign:"center" }}>
         <div style={{ fontSize:42, marginBottom:14 }}>🛠️</div>
-        <div style={{ fontSize:22, fontWeight:900, marginBottom:6, color:"#ffb088" }}>Tryb administratora</div>
-        <div style={{ fontSize:13, color:"#c9a8e0", marginBottom:24 }}>Wpisz hasło, żeby wejść</div>
+        <div style={{ fontSize:22, fontWeight:900, marginBottom:6, color:"#7dffb8" }}>Tryb administratora</div>
+        <div style={{ fontSize:13, color:"#a8c9b0", marginBottom:24 }}>Wpisz hasło, żeby wejść</div>
         <input type="password" value={pw} onChange={e => { setPw(e.target.value); setErr(false); }} onKeyDown={e => { if (e.key==="Enter") tryLogin(); }} placeholder="Hasło..." autoFocus
-          style={{ display:"block", width:"100%", marginBottom:12, background:"#150d2e", border:`1px solid ${err?"#ef4444":"#3b1f5c"}`, borderRadius:8, color:"#e2e8f0", padding:"12px 14px", fontSize:15, textAlign:"center", boxSizing:"border-box" }} />
+          style={{ display:"block", width:"100%", marginBottom:12, background:"#0f1612", border:`1px solid ${err?"#ef4444":"#2a3d2f"}`, borderRadius:8, color:"#e2e8f0", padding:"12px 14px", fontSize:15, textAlign:"center", boxSizing:"border-box" }} />
         {err && <div style={{ fontSize:12, color:"#ef4444", marginBottom:12 }}>❌ Złe hasło, spróbuj jeszcze raz</div>}
-        <button onClick={tryLogin} style={{ width:"100%", padding:"12px", background:"linear-gradient(135deg,#ff6b35,#e0289d)", border:"none", borderRadius:8, color:"#fff", fontSize:15, fontWeight:800, cursor:"pointer", marginBottom:10 }}>Wejdź</button>
-        <button onClick={onBack} style={{ width:"100%", padding:"10px", background:"transparent", border:"1px solid #3b1f5c", borderRadius:8, color:"#94a3b8", fontSize:13, cursor:"pointer" }}>← Wróć do wyboru trybu</button>
+        <button onClick={tryLogin} style={{ width:"100%", padding:"12px", background:"linear-gradient(135deg,#16a34a,#00ff85)", border:"none", borderRadius:8, color:"#06150c", fontSize:15, fontWeight:800, cursor:"pointer", marginBottom:10 }}>Wejdź</button>
+        <button onClick={onBack} style={{ width:"100%", padding:"10px", background:"transparent", border:"1px solid #2a3d2f", borderRadius:8, color:"#94a3b8", fontSize:13, cursor:"pointer" }}>← Wróć do wyboru trybu</button>
       </div>
     </div>
   );

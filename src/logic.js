@@ -1,5 +1,5 @@
 // ════════════════════════════════════════════════════════════════════════════
-//  WAKACJE FC — logika (zawodnicy, wartości, sezony, nagrody, mecze)
+//  PIĘKNI I MŁODZI FC — logika (zawodnicy, wartości, sezony, nagrody, mecze)
 // ════════════════════════════════════════════════════════════════════════════
 
 // ─── ZAWODNICY ────────────────────────────────────────────────────────────────
@@ -13,7 +13,6 @@ export const PLAYERS = [
   { id:"bartek",  name:"Bartek",  position:"N/BR",  value:180_000_000 },
   { id:"hux",     name:"Hux",     position:"ŚP/BR", value:120_000_000 },
   { id:"tymko",   name:"Tymko",   position:"BR/ŚO", value:800_000 },
-  { id:"kalinek", name:"Kalinek", position:"PS/LS", value:18_000_000 },
   { id:"piotrulla", name:"Piotrulla", position:"ŚO", value:4_000_000 },
 ];
 
@@ -35,6 +34,7 @@ export const MAX_VALUE = 400_000_000;          // twardy sufit wartości rynkowe
 export const TOP_TIER_FLOOR = 380_000_000;     // od tego progu obowiązuje zaostrzony reżim spadków
 export const TOP_TIER_MIN_RATING = 9.0;        // ocena wymagana, by NIE tracić na wartości blisko limitu
 export const TOP_TIER_DROP_MULT = 4;           // mnożnik spadku wartości poniżej wymaganej oceny
+export const MAX_GAIN_PER_MATCH = 10_000_000;  // twardy limit wzrostu wartości za pojedynczy mecz (pct + viral razem)
 
 // ─── DOGANIANIE NISKICH WARTOŚCI ───────────────────────────────────────────────
 // Im niżej wyceniony zawodnik, tym mocniej każdy mecz przekłada się procentowo na jego wartość
@@ -48,19 +48,6 @@ export const VIRAL_MIN_RATING = 7.5;   // próg oceny meczu, od którego jest sz
 export const VIRAL_CHANCE = 0.18;      // szansa na wystąpienie przy spełnionym progu oceny
 export const VIRAL_BONUS_MIN = 0.04;   // min. jednorazowy bonus (% obecnej wartości)
 export const VIRAL_BONUS_MAX = 0.09;   // maks. jednorazowy bonus (% obecnej wartości)
-
-// ─── KAMIENIE MILOWE (rosnące progi z jednorazowym bonusem) ──────────────────
-export const MILESTONE_BONUS_MIN = 15_000_000;
-export const MILESTONE_BONUS_MAX = 20_000_000;
-// Lista progów: co 5mln do 50mln, potem co 25mln do 200mln, potem co 50mln do limitu.
-export function buildMilestones() {
-  const out = [];
-  for (let v = 5_000_000; v <= 50_000_000; v += 5_000_000) out.push(v);
-  for (let v = 75_000_000; v <= 200_000_000; v += 25_000_000) out.push(v);
-  for (let v = 250_000_000; v <= MAX_VALUE; v += 50_000_000) out.push(v);
-  return out;
-}
-export const MILESTONES = buildMilestones();
 
 export const DEFAULT_CRITERIA = [
   { id:"goal",             label:"⚽ Gol",               desc:"Trafił do siatki",                      points:0.40,  cat:"pos" },
@@ -176,7 +163,7 @@ export const rc = (r) => r >= 8 ? "#22c55e" : r >= 7 ? "#84cc16" : r >= 6.5 ? "#
 // Kolor badge'a oceny w stylu SofaScore: turkus (znakomita) → niebieski (bardzo dobra) → pomarańcz (przeciętna) → czerwień (słaba)
 export const rcSofa = (r) => r >= 8.5 ? "#0ea5a8" : r >= 7.0 ? "#3461eb" : r >= 6.0 ? "#f08a1c" : "#e0303f";
 export const safeR = (m) => typeof m.rating === "number" ? m.rating : parseFloat(m.rating) || BASE_RATING;
-export const medalColor = (i) => i === 0 ? "#fbbf24" : i === 1 ? "#c9a8e0" : i === 2 ? "#b45309" : "#3b1f5c";
+export const medalColor = (i) => i === 0 ? "#fbbf24" : i === 1 ? "#a8c9b0" : i === 2 ? "#b45309" : "#2a3d2f";
 
 export function calcMatchRating(cmap, clist) {
   if (!clist || !cmap) return BASE_RATING;
@@ -220,7 +207,9 @@ export function getSessionChangePct(cur, rd, rating) {
   const base = (0.08 / tier) * catchupMult(cur);
   let pct = clamp(base * rd, -0.32, 0.32);
   const abs1 = cur * pct;
-  if (Math.abs(abs1) > 20_000_000) pct = (20_000_000 * Math.sign(abs1)) / cur;
+  // Twardy limit kwotowy: wzrost max MAX_GAIN_PER_MATCH, spadek max 20mln (poza karą top-tier niżej).
+  if (abs1 > MAX_GAIN_PER_MATCH) pct = MAX_GAIN_PER_MATCH / cur;
+  else if (abs1 < -20_000_000) pct = -20_000_000 / cur;
 
   // Blisko/na limicie €400M: utrzymanie wymaga oceny ≥9.0 w KAŻDYM meczu.
   // Poniżej tego progu spadek wartości jest liczony z mnożnikiem x4.
@@ -254,7 +243,6 @@ export function calcValueFrom(base, matches, opinions, seasonEvents, playerId) {
 
   if (!steps.length && !ops.length) return Math.min(base, MAX_VALUE);
   let cur = Math.min(base, MAX_VALUE);
-  const milestonesHit = new Set(); // unikamy wielokrotnego naliczenia tego samego progu w jednym przebiegu
 
   steps.forEach(s => {
     if (s.kind === "match") {
@@ -273,16 +261,8 @@ export function calcValueFrom(base, matches, opinions, seasonEvents, playerId) {
         }
       }
 
-      // ── KAMIENIE MILOWE: jednorazowy bonus za najwyższy nowo-osiągnięty próg w TYM kroku ──
-      // (sprawdzane względem wartości po pct+viral; przy przeskoczeniu kilku progów naraz liczy się tylko jeden bonus)
-      const reachedNow = MILESTONES.filter(ms_ => before < ms_ && cur >= ms_ && !milestonesHit.has(ms_));
-      if (reachedNow.length) {
-        const top = reachedNow[reachedNow.length - 1];
-        reachedNow.forEach(ms_ => milestonesHit.add(ms_));
-        const seed = `${pid}|milestone|${top}`;
-        const bonus = MILESTONE_BONUS_MIN + seededRand01(seed) * (MILESTONE_BONUS_MAX - MILESTONE_BONUS_MIN);
-        cur = clamp(cur + Math.round(bonus), 100_000, MAX_VALUE);
-      }
+      // Twardy limit: wzrost wartości w POJEDYNCZYM meczu (pct + viral razem) nie może przekroczyć MAX_GAIN_PER_MATCH.
+      if (cur - before > MAX_GAIN_PER_MATCH) cur = clamp(before + MAX_GAIN_PER_MATCH, 100_000, MAX_VALUE);
     } else if (s.kind === "event") {
       if (s.e.type === "divide3") cur = Math.max(Math.round(cur / 3), 100_000);
       else if (s.e.type === "bonus") cur = clamp(cur + Math.round(s.e.amount || 0), 100_000, MAX_VALUE);
@@ -320,15 +300,14 @@ export function valueAtDateExSeasonRollover(player, cutoffStr, excludeSeasonIdx)
   return calcValueFrom(player.value, ms, ops, evs, player.id);
 }
 
-// Przebieg wartości mecz-po-meczu, spójny z calcValueFrom (uwzględnia viral moment i kamienie milowe).
-// Zwraca listę meczów wzbogaconą o {rating, valDelta, valPct, viral, milestone} — do wyświetlenia w historii zawodnika.
+// Przebieg wartości mecz-po-meczu, spójny z calcValueFrom (uwzględnia viral moment i twardy limit wzrostu/mecz).
+// Zwraca listę meczów wzbogaconą o {rating, valDelta, valPct, viral} — do wyświetlenia w historii zawodnika.
 // UWAGA: to NIE uwzględnia efektów post-pętli (bonus formy, momentum ostatnich 3 meczów, opinie) —
 // te liczone są raz na końcu calcValue(), nie per-mecz, więc suma delt stąd może się nieznacznie różnić od calcValue(p).
 export function matchByMatchWalk(player) {
   const ms = [...(player.matches || [])].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   const pid = player.id || "p";
   let cur = Math.min(player.value, MAX_VALUE);
-  const milestonesHit = new Set();
   return ms.map(m => {
     const r = safeR(m);
     const rd = r - BASE_RATING;
@@ -336,7 +315,7 @@ export function matchByMatchWalk(player) {
     const before = cur;
     cur = clamp(cur + Math.round(cur * pct), 100_000, MAX_VALUE);
 
-    let viral = false, milestone = null;
+    let viral = false;
     if (r >= VIRAL_MIN_RATING && cur < MAX_VALUE) {
       const seed = `${pid}|viral|${m.id ?? m.date}`;
       if (seededRand01(seed) < VIRAL_CHANCE) {
@@ -346,22 +325,12 @@ export function matchByMatchWalk(player) {
       }
     }
 
-    // Kamień milowy: liczymy WZGLĘDEM wartości po pct+viral (nie re-sprawdzamy po dodaniu samego bonusu,
-    // żeby uniknąć kaskady "bonus odblokowuje kolejny bonus odblokowuje kolejny..."). Jeśli w tym kroku
-    // przekroczono kilka progów naraz, liczy się tylko NAJWYŻSZY z nich — jeden bonus na mecz.
-    const reachedNow = MILESTONES.filter(ms_ => before < ms_ && cur >= ms_ && !milestonesHit.has(ms_));
-    if (reachedNow.length) {
-      const top = reachedNow[reachedNow.length - 1];
-      reachedNow.forEach(ms_ => milestonesHit.add(ms_)); // przeskoczone niższe progi też liczymy jako "zdobyte", bez osobnych bonusów
-      const seed = `${pid}|milestone|${top}`;
-      const bonus = MILESTONE_BONUS_MIN + seededRand01(seed) * (MILESTONE_BONUS_MAX - MILESTONE_BONUS_MIN);
-      cur = clamp(cur + Math.round(bonus), 100_000, MAX_VALUE);
-      milestone = top;
-    }
+    // Twardy limit: wzrost wartości w POJEDYNCZYM meczu (pct + viral razem) nie może przekroczyć MAX_GAIN_PER_MATCH.
+    if (cur - before > MAX_GAIN_PER_MATCH) cur = clamp(before + MAX_GAIN_PER_MATCH, 100_000, MAX_VALUE);
 
     const delta = cur - before;
     const ps = before > 0 ? ((delta / before) * 100).toFixed(1) : "0";
-    return { ...m, rating: r, valDelta: delta, valPct: ps, viral, milestone };
+    return { ...m, rating: r, valDelta: delta, valPct: ps, viral };
   });
 }
 
@@ -614,7 +583,7 @@ export function normalizePlayers(loaded) {
 }
 
 // ─── SERIE DO WYKRESÓW ────────────────────────────────────────────────────────
-export const SEASON_COLORS = ["#ff6b35","#00d9c0","#a855f7","#fbbf24","#22c55e","#ef4444","#3b82f6","#ec4899","#f97316","#14b8a6"];
+export const SEASON_COLORS = ["#00ff85","#00d9c0","#a855f7","#fbbf24","#22c55e","#ef4444","#3b82f6","#ec4899","#f97316","#14b8a6"];
 export const seasonColor = (idx) => SEASON_COLORS[(((idx - 1) % SEASON_COLORS.length) + SEASON_COLORS.length) % SEASON_COLORS.length];
 
 // Wartość po każdym meczu (narastająco) — punkty {x,y,date,season}; x=0 to wartość bazowa
