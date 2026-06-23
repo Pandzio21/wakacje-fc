@@ -5,14 +5,16 @@ import {
   GOAL_TYPES, GICO, RESULT_COLOR, RESULT_ICON, CAT_LABELS,
   HALF_MIN, PHASE_ORDER, PHASE_LABELS, goalPhase, goalSortVal, goalLabel,
   fv, rc, rcSofa, safeR, medalColor,
-  calcMatchRating, getAvgRating, checkFormBonus, getSessionChangePct, calcValue, getTrend, applyGoalToCriteria,
+  calcMatchRating, getAvgRating, getSessionChangePct, calcValue, getTrend, applyGoalToCriteria,
   FIRST_SEASON_END, todayStr, addDaysStr, fmtPL,
   seasonIndexOf, seasonRange, matchKeyOf, getMatches, buildSeasons,
   computeSeasonAwards, getLastCompletedSeasonAwards, normalizePlayers,
   SEASON_COLORS, seasonColor, valueSeries, metricSeries,
   MAX_VALUE, TOP_TIER_FLOOR, TOP_TIER_MIN_RATING, TOP_TIER_DROP_MULT,
   applySeasonRolloverIfNeeded, SEASON_BONUSES,
-  matchByMatchWalk, VIRAL_MIN_RATING, CATCHUP_FLOOR, CATCHUP_CEIL, MAX_GAIN_PER_MATCH,
+  matchByMatchWalk, CATCHUP_FLOOR, CATCHUP_CEIL, MAX_GAIN_PER_MATCH,
+  DUEL_SET_TYPES, shuffleSets, drawPairs, calcSetScore, calcDuelMatchResult,
+  computeDuelPlayerStats, duelEfficiency,
 } from "./logic.js";
 
 // ─── WSPÓLNE STYLE — „Piękni i Młodzi FC" (motyw EA FC 25: zielono-czarny) ─────
@@ -300,11 +302,6 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
                   : <div style={{ fontSize:16, fontWeight:800, color:chg>=0?"#22c55e":"#ef4444" }}>{chg>=0?"+":""}{fv(Math.abs(chg))}</div>}
               </div>
             </div>
-            {!rnd && pr>=VIRAL_MIN_RATING && (
-              <div style={{ background:"rgba(168,85,247,.1)", border:"1px solid #a855f7", borderRadius:8, padding:"8px 12px", marginTop:-8, marginBottom:14, fontSize:11, color:"#d8b4fe" }}>
-                🔥 Przy tak dobrej ocenie jest szansa na "viral moment" — dodatkowy losowy bonus do wartości po zapisaniu meczu.
-              </div>
-            )}
             {!rnd && curV>=TOP_TIER_FLOOR && pr<TOP_TIER_MIN_RATING && (
               <div style={{ background:"rgba(239,68,68,.12)", border:"1px solid #ef4444", borderRadius:8, padding:"8px 12px", marginTop:-8, marginBottom:14, fontSize:11, color:"#fca5a5" }}>
                 ⚠️ {p?.name} jest blisko limitu {fv(MAX_VALUE)} — przy ocenie poniżej {TOP_TIER_MIN_RATING.toFixed(1)} wartość spada x4 szybciej.
@@ -591,7 +588,6 @@ function CompactMatchRow({ m, playerId, criteria }) {
             {iconGroup("⚽", realGoals.length, "#7dffb8", "Gole")}
             {iconGroup("😬", ownGoals.length, "#fca5a5", "Bramki samobójcze")}
             {iconGroup("🎯", myAssists.length, "#5eead4", "Asysty")}
-            {m.viral && <span title="Viral moment">🔥</span>}
           </div>
         </div>
         <div style={{ flexShrink:0, display:"flex", flexDirection:"column", alignItems:"flex-end", gap:2 }}>
@@ -894,8 +890,6 @@ function InfoView() {
         <Li ico="🎯">Każdy zawodnik startuje od bazowej oceny <b style={{ color:"#7dffb8" }}>{BASE_RATING}</b>. Plusy i minusy z kryteriów podnoszą lub obniżają ocenę (od 1 do 10).</Li>
         <Li ico="💰">Wartość rośnie po dobrych meczach i spada po słabych. Im niższa wartość zawodnika, tym większe wahania procentowe.</Li>
         <Li ico="📈">Wzrost wartości w pojedynczym meczu jest ograniczony do <b style={{ color:"#7dffb8" }}>{fv(MAX_GAIN_PER_MATCH)}</b>, niezależnie od oceny.</Li>
-        <Li ico="🔥">Seria dobrych występów daje <b style={{ color:"#7dffb8" }}>bonus formy +30%</b> do wartości (próg zależy od poziomu zawodnika).</Li>
-        <Li ico="✨">Po bardzo dobrym meczu (ocena ≥{VIRAL_MIN_RATING}) jest losowa szansa na <b style={{ color:"#7dffb8" }}>„viral moment"</b> — dodatkowy jednorazowy bonus.</Li>
         <Li ico="💬">Opinie klasy (👍/👎) lekko korygują wartość.</Li>
         <Li ico="🚧">Wartość rynkowa ma twardy sufit <b style={{ color:"#7dffb8" }}>{fv(MAX_VALUE)}</b>. Blisko tego progu trzeba utrzymywać ocenę ≥{TOP_TIER_MIN_RATING.toFixed(1)} w każdym meczu, inaczej wartość spada {TOP_TIER_DROP_MULT}× szybciej.</Li>
       </div>
@@ -1090,6 +1084,7 @@ function MainApp({ readOnly, onExit }) {
   const [players, setPlayers] = useState(() => normalizePlayers(DEFAULT_PLAYERS));
   const [criteria, setCriteria] = useState(DEFAULT_CRITERIA);
   const [seasonNames, setSeasonNames] = useState({});
+  const [duelMatches, setDuelMatches] = useState([]);
   const [view, setView] = useState("ranking");
   const [selP, setSelP] = useState(null);
   const [expanded, setExpanded] = useState(null);
@@ -1103,10 +1098,10 @@ function MainApp({ readOnly, onExit }) {
 
   function showToast(msg, col="#00ff85") { setToast({ msg, col }); setTimeout(() => setToast(null), 2800); }
 
-  async function saveToStorage(p, c, sn) {
+  async function saveToStorage(p, c, sn, dm) {
     try {
       const ts = Date.now();
-      const jsonStr = JSON.stringify({ players:p, criteria:c, seasonNames:(sn!==undefined?sn:seasonNames), ts });
+      const jsonStr = JSON.stringify({ players:p, criteria:c, seasonNames:(sn!==undefined?sn:seasonNames), duelMatches:(dm!==undefined?dm:duelMatches), ts });
       const sizeKB = (jsonStr.length/1024).toFixed(1);
       const res = await fetch("/api/data", { method:"POST", headers:{ "Content-Type":"application/json" }, body:jsonStr });
       if (!res.ok) { const t = await res.text().catch(() => ""); showToast(`⚠️ Błąd zapisu (${res.status}): ${t.slice(0,80)}`, "#ef4444"); return; }
@@ -1135,6 +1130,7 @@ function MainApp({ readOnly, onExit }) {
       }
       if (data?.criteria) setCriteria(data.criteria);
       if (data?.seasonNames && typeof data.seasonNames === "object") setSeasonNames(data.seasonNames);
+      if (Array.isArray(data?.duelMatches)) setDuelMatches(data.duelMatches);
       if (data?.ts) { lastTs.current = data.ts; setLastSync(new Date(data.ts).toLocaleTimeString("pl-PL")); }
     } catch (e) { /* offline ok */ }
   }
@@ -1150,7 +1146,15 @@ function MainApp({ readOnly, onExit }) {
     const np = nextPlayers !== undefined ? nextPlayers : players;
     const nc = nextCriteria !== undefined ? nextCriteria : criteria;
     setPlayers(np); setCriteria(nc);
-    saveToStorage(np, nc, seasonNames);
+    saveToStorage(np, nc, seasonNames, duelMatches);
+  }
+
+  function commitDuel(nextDuelMatches, nextPlayers) {
+    const ndm = nextDuelMatches !== undefined ? nextDuelMatches : duelMatches;
+    const np = nextPlayers !== undefined ? nextPlayers : players;
+    setDuelMatches(ndm);
+    if (nextPlayers) setPlayers(np);
+    saveToStorage(np, criteria, seasonNames, ndm);
   }
 
   // zapis nazwy sezonu (admin) — niezależny od commit(), bo dotyczy innego pola stanu
@@ -1264,8 +1268,8 @@ function MainApp({ readOnly, onExit }) {
   // Rzadziej używane funkcje (Porównaj, Kryteria, Opinie, Edytor, Info) żyją w „Więcej”.
   const navItems = [["ranking","🏆","Ranking"],["history","📅","Mecze"],["stats","📊","Statystyki"],["seasons","👑","Sezony"],["more","☰","Więcej"]];
   const moreItems = readOnly
-    ? [["compare","⚖️","Porównaj zawodników","Zestaw dwóch graczy obok siebie"],["criteria","📋","Kryteria ocen","Zasady punktacji w meczu"],["info","ℹ️","O aplikacji","Jak działa system ocen i wyceny"]]
-    : [["compare","⚖️","Porównaj zawodników","Zestaw dwóch graczy obok siebie"],["opinions","💬","Opinie","Dodaj komentarz o zawodniku"],["criteria","📋","Kryteria ocen","Zasady punktacji w meczu"],["editor","⚙️","Edytor kryteriów","Zmień punktację i wagi"],["info","ℹ️","O aplikacji","Jak działa system ocen i wyceny"]];
+    ? [["duels","⚡","Pojedynki","Tryb Team vs Team"],["compare","⚖️","Porównaj zawodników","Zestaw dwóch graczy obok siebie"],["criteria","📋","Kryteria ocen","Zasady punktacji w meczu"],["info","ℹ️","O aplikacji","Jak działa system ocen i wyceny"]]
+    : [["duels","⚡","Pojedynki","Tryb Team vs Team"],["compare","⚖️","Porównaj zawodników","Zestaw dwóch graczy obok siebie"],["opinions","💬","Opinie","Dodaj komentarz o zawodniku"],["criteria","📋","Kryteria ocen","Zasady punktacji w meczu"],["editor","⚙️","Edytor kryteriów","Zmień punktację i wagi"],["info","ℹ️","O aplikacji","Jak działa system ocen i wyceny"]];
 
   return (
     <div style={{ minHeight:"100vh", background:BG, color:"#e2e8f0", fontFamily:"'Inter',system-ui,sans-serif", paddingBottom:80 }}>
@@ -1300,7 +1304,7 @@ function MainApp({ readOnly, onExit }) {
       <div style={{ maxWidth:720, margin:"0 auto", padding:"0 16px" }}>
         {toast && <div style={{ background:toast.col, borderRadius:8, padding:"10px 16px", marginTop:14, fontSize:13, fontWeight:600 }}>{toast.msg}</div>}
 
-        {["compare","opinions","criteria","editor","info"].includes(view) && (
+        {["compare","opinions","criteria","editor","info","duels"].includes(view) && (
           <button onClick={() => setView("more")} style={{ display:"flex", alignItems:"center", gap:5, background:"transparent", border:"none", color:"#4a6b56", fontSize:12, fontWeight:700, cursor:"pointer", padding:"14px 0 0", marginBottom:-6 }}>
             ‹ Więcej
           </button>
@@ -1315,7 +1319,6 @@ function MainApp({ readOnly, onExit }) {
             )}
             {ranked.map((p,i) => {
               const avg = getAvgRating(p.matches), val = calcValue(p), trend = getTrend(p.matches), chg = val-p.value;
-              const formBonus = checkFormBonus(p);
               const badges = badgesFor(p.id, lca);
               const isOpen = expanded === p.id;
               return (
@@ -1327,7 +1330,6 @@ function MainApp({ readOnly, onExit }) {
                       <div style={{ fontWeight:700, fontSize:14, color:"#e2e8f0", display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
                         <span>{p.name} <span style={{ fontSize:11, color:"#334155", fontWeight:400 }}>· {p.position}</span></span>
                         {badges.map(([emoji, title], bi) => <span key={bi} title={title} style={{ fontSize:13 }}>{emoji}</span>)}
-                        {formBonus && <span style={{ fontSize:9, background:"rgba(251,191,36,.2)", border:"1px solid #fbbf24", color:"#fbbf24", borderRadius:3, padding:"1px 5px" }}>🔥 FORMA +30%</span>}
                         {val>=TOP_TIER_FLOOR && <span title={`Blisko limitu ${fv(MAX_VALUE)} — wymagana ocena ≥${TOP_TIER_MIN_RATING.toFixed(1)}, inaczej spadek x4`} style={{ fontSize:9, background:"rgba(239,68,68,.18)", border:"1px solid #ef4444", color:"#fca5a5", borderRadius:3, padding:"1px 5px" }}>⚠️ TOP · ≥{TOP_TIER_MIN_RATING.toFixed(1)}</span>}
                       </div>
                       <div style={{ fontSize:11, color:"#334155", marginTop:1 }}>{p.matches.length} meczów · kliknij po wykres</div>
@@ -1455,6 +1457,9 @@ function MainApp({ readOnly, onExit }) {
           </div>
         )}
 
+        {/* TRYB POJEDYNKI */}
+        {view==="duels" && <DuelsView players={players} duelMatches={duelMatches} readOnly={readOnly} onSave={commitDuel} />}
+
         {/* PORÓWNANIE */}
         {view==="compare" && <CompareView players={players} />}
 
@@ -1577,7 +1582,7 @@ function MainApp({ readOnly, onExit }) {
         {/* SZCZEGÓŁY ZAWODNIKA */}
         {view==="player" && selP && (() => {
           const p = players.find(x => x.id===selP); if (!p) return null;
-          const avg = getAvgRating(p.matches), val = calcValue(p), chg = val-p.value, form = checkFormBonus(p);
+          const avg = getAvgRating(p.matches), val = calcValue(p), chg = val-p.value;
           const badges = badgesFor(p.id, lca);
           const mwv = matchByMatchWalk(p);
           return (
@@ -1590,7 +1595,6 @@ function MainApp({ readOnly, onExit }) {
                       {p.name}{badges.map(([e,t],bi) => <span key={bi} title={t} style={{ fontSize:16 }}>{e}</span>)}
                     </div>
                     <div style={{ fontSize:12, color:"#475569" }}>{p.position} · {p.matches.length} meczów</div>
-                    {form && <div style={{ fontSize:10, background:"rgba(251,191,36,.15)", border:"1px solid #fbbf24", color:"#fbbf24", borderRadius:4, padding:"2px 7px", marginTop:5, display:"inline-block" }}>🔥 FORMA AKTYWNA · +30% wartość</div>}
                     {val<CATCHUP_CEIL && <div title={`Poniżej ${fv(CATCHUP_CEIL)} każdy mecz mocniej wpływa na wartość — łatwiej nadrobić dystans`} style={{ fontSize:10, background:"rgba(34,197,94,.15)", border:"1px solid #22c55e", color:"#86efac", borderRadius:4, padding:"2px 7px", marginTop:5, display:"inline-block" }}>⚡ Tryb doganiania · wzmocnione zmiany</div>}
                     {val>=TOP_TIER_FLOOR && <div style={{ fontSize:10, background:"rgba(239,68,68,.15)", border:"1px solid #ef4444", color:"#fca5a5", borderRadius:4, padding:"2px 7px", marginTop:5, display:"inline-block" }}>⚠️ Blisko limitu {fv(MAX_VALUE)} · wymagana ocena ≥{TOP_TIER_MIN_RATING.toFixed(1)}, inaczej spadek x4</div>}
                     <div style={{ display:"flex", gap:8, marginTop:8 }}>
@@ -1690,6 +1694,589 @@ function MainApp({ readOnly, onExit }) {
 const ADMIN_PASSWORD = "12admin@34";
 const MODE_KEY = "wfc-mode";
 const ADMIN_KEY = "wfc-admin-authed";
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  TRYB POJEDYNKI — UI
+// ═══════════════════════════════════════════════════════════════════════════
+
+const SET_LABELS = Object.fromEntries(DUEL_SET_TYPES.map(s => [s.id, s]));
+
+function DuelsView({ players, duelMatches, readOnly, onSave }) {
+  const [tab, setTab] = useState("history");
+  const [creating, setCreating] = useState(false);
+
+  if (creating && !readOnly) {
+    return <DuelWizard players={players} duelMatches={duelMatches} onSave={(dm, np) => { onSave(dm, np); setCreating(false); }} onCancel={() => setCreating(false)} />;
+  }
+
+  return (
+    <div style={{ marginTop:16 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+        <div>
+          <div style={{ fontSize:18, fontWeight:900, color:"#e7f5ec" }}>⚡ Pojedynki</div>
+          <div style={{ fontSize:11, color:"#4a6b56" }}>Team vs Team · {duelMatches.length} meczów</div>
+        </div>
+        {!readOnly && (
+          <button onClick={() => setCreating(true)}
+            style={{ background:"linear-gradient(135deg,#16a34a,#00ff85)", border:"none", borderRadius:10, color:"#06150c", fontSize:13, fontWeight:800, padding:"10px 16px", cursor:"pointer" }}>
+            ⚡ Nowy mecz
+          </button>
+        )}
+      </div>
+
+      {/* Zakładki */}
+      <div style={{ display:"flex", gap:4, marginBottom:16, background:"#070a08", borderRadius:10, padding:4 }}>
+        {[["history","📅 Historia"],["stats","📊 Statystyki"]].map(([t,l]) => (
+          <button key={t} onClick={() => setTab(t)} style={{ flex:1, padding:"8px", border:"none", borderRadius:7, background:tab===t?"#0f1612":"transparent", color:tab===t?"#00ff85":"#4a6b56", fontSize:12, fontWeight:700, cursor:"pointer" }}>{l}</button>
+        ))}
+      </div>
+
+      {tab==="history" && <DuelHistory duelMatches={duelMatches} players={players} />}
+      {tab==="stats" && <DuelStats players={players} duelMatches={duelMatches} />}
+    </div>
+  );
+}
+
+// ─── HISTORIA MECZÓW POJEDYNKOWYCH ────────────────────────────────────────────
+function DuelHistory({ duelMatches, players }) {
+  const nameOf = (id) => { const p = players.find(x=>x.id===id); return p?p.name:id; };
+  const sorted = [...duelMatches].sort((a,b) => (b.date||"").localeCompare(a.date||""));
+  if (!sorted.length) return <div style={{ textAlign:"center", color:"#4a6b56", padding:"40px 0", fontSize:13 }}>Brak meczów — zacznij od przycisku „⚡ Nowy mecz".</div>;
+
+  return (
+    <div>
+      {sorted.map(dm => {
+        const res = dm.result || {};
+        const wLabel = res.winner==="A" ? (dm.teamAName||"Team A") : res.winner==="B" ? (dm.teamBName||"Team B") : "Remis";
+        const wColor = res.winner==="A"?"#00ff85":res.winner==="B"?"#7ef5e5":"#f59e0b";
+        return (
+          <div key={dm.id} style={{ ...CARD, marginBottom:10 }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:10 }}>
+              <div>
+                <div style={{ fontSize:11, color:"#4a6b56" }}>{fmtPL(dm.date)}</div>
+                <div style={{ fontSize:14, fontWeight:800, color:"#e7f5ec", marginTop:2 }}>
+                  <span style={{ color:"#00ff85" }}>{dm.teamAName||"Team A"}</span>
+                  <span style={{ color:"#4a6b56", margin:"0 8px" }}>vs</span>
+                  <span style={{ color:"#7ef5e5" }}>{dm.teamBName||"Team B"}</span>
+                </div>
+                <div style={{ fontSize:11, color:"#4a6b56", marginTop:2 }}>
+                  {(dm.teamA||[]).map(id=>nameOf(id)).join(", ")} · {(dm.teamB||[]).map(id=>nameOf(id)).join(", ")}
+                </div>
+              </div>
+              <div style={{ textAlign:"right" }}>
+                <div style={{ fontSize:22, fontWeight:900 }}>
+                  <span style={{ color:"#00ff85" }}>{res.setA??0}</span>
+                  <span style={{ color:"#4a6b56", margin:"0 4px" }}>:</span>
+                  <span style={{ color:"#7ef5e5" }}>{res.setB??0}</span>
+                </div>
+                <div style={{ fontSize:10, fontWeight:700, color:wColor }}>{wLabel==="Remis"?"🤝 Remis":"🏆 "+wLabel}</div>
+              </div>
+            </div>
+            <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+              {(dm.sets||[]).map((s,i) => {
+                const st = SET_LABELS[s.setType];
+                const w = s.winner==="A"?(dm.teamAName||"A"):s.winner==="B"?(dm.teamBName||"B"):"Remis";
+                return (
+                  <div key={i} style={{ background:"#070a08", border:`1px solid ${s.winner==="A"?"#15803d":s.winner==="B"?"#0e7490":"#2a3d2f"}`, borderRadius:6, padding:"4px 8px", fontSize:10 }}>
+                    <span>{st?.icon} {st?.label}</span>
+                    <span style={{ color:"#4a6b56", margin:"0 4px" }}>·</span>
+                    <span style={{ fontWeight:700, color:s.winner==="A"?"#7dffb8":s.winner==="B"?"#7ef5e5":"#f59e0b" }}>{s.ptsA}:{s.ptsB}</span>
+                  </div>
+                );
+              })}
+              {res.penaltyWinner && <div style={{ background:"rgba(239,68,68,.1)", border:"1px solid #ef4444", borderRadius:6, padding:"4px 8px", fontSize:10, color:"#fca5a5" }}>🥅 Karne: {res.penaltyWinner==="A"?(dm.teamAName||"A"):(dm.teamBName||"B")}</div>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── STATYSTYKI TRYBU POJEDYNKI ───────────────────────────────────────────────
+function DuelStats({ players, duelMatches }) {
+  const realPlayers = players.filter(p => !p.random && (p.duels||[]).length > 0);
+  if (!realPlayers.length) return <div style={{ textAlign:"center", color:"#4a6b56", padding:"40px 0", fontSize:13 }}>Brak statystyk — rozegraj pierwszy mecz.</div>;
+
+  // Ranking teamów z duelMatches
+  const teamStats = {};
+  duelMatches.forEach(dm => {
+    ["A","B"].forEach(side => {
+      const name = side==="A" ? (dm.teamAName||"Team A") : (dm.teamBName||"Team B");
+      if (!teamStats[name]) teamStats[name] = {name, played:0, wins:0, draws:0, losses:0, setsFor:0, setsAgainst:0};
+      const t = teamStats[name];
+      t.played++;
+      const res = dm.result||{};
+      const mySet = side==="A"?res.setA:res.setB;
+      const oppSet = side==="A"?res.setB:res.setA;
+      t.setsFor += mySet||0; t.setsAgainst += oppSet||0;
+      if (res.winner===side) t.wins++;
+      else if (res.winner==="draw") t.draws++;
+      else t.losses++;
+    });
+  });
+  const teams = Object.values(teamStats).sort((a,b) => b.wins-a.wins || b.setsFor-a.setsFor);
+
+  return (
+    <div>
+      {teams.length>0 && (
+        <div style={CARD}>
+          <div style={LABEL}>RANKING TEAMÓW</div>
+          {teams.map((t,i) => (
+            <div key={t.name} style={{ display:"flex", alignItems:"center", gap:10, padding:"8px 0", borderBottom:"1px solid #1c2820" }}>
+              <span style={{ fontSize:13, fontWeight:900, color:i===0?"#fbbf24":i===1?"#a8c9b0":"#4a6b56", width:20 }}>#{i+1}</span>
+              <span style={{ flex:1, fontSize:13, fontWeight:700, color:"#e7f5ec" }}>{t.name}</span>
+              <span style={{ fontSize:11, color:"#22c55e", fontWeight:700 }}>{t.wins}W</span>
+              <span style={{ fontSize:11, color:"#f59e0b" }}>{t.draws}R</span>
+              <span style={{ fontSize:11, color:"#ef4444" }}>{t.losses}P</span>
+              <span style={{ fontSize:10, color:"#4a6b56" }}>{t.setsFor}:{t.setsAgainst} setów</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div style={CARD}>
+        <div style={LABEL}>STATYSTYKI ZAWODNIKÓW</div>
+        {realPlayers.map(p => {
+          const st = computeDuelPlayerStats(p);
+          return (
+            <div key={p.id} style={{ padding:"10px 0", borderBottom:"1px solid #1c2820" }}>
+              <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:6 }}>
+                <span style={{ fontSize:13, fontWeight:800, color:"#e7f5ec" }}>{p.name}</span>
+                <div style={{ display:"flex", gap:6 }}>
+                  <span style={{ fontSize:11, color:"#22c55e", fontWeight:700 }}>{st.wins}W</span>
+                  <span style={{ fontSize:11, color:"#f59e0b" }}>{st.draws}R</span>
+                  <span style={{ fontSize:11, color:"#ef4444" }}>{st.losses}P</span>
+                </div>
+              </div>
+              <div style={{ display:"flex", gap:6, flexWrap:"wrap" }}>
+                {DUEL_SET_TYPES.map(s => {
+                  const attEff = duelEfficiency(st, s.id, "attacker");
+                  const defEff = duelEfficiency(st, s.id, "defender");
+                  if (attEff===null && defEff===null) return null;
+                  return (
+                    <div key={s.id} style={{ background:"#070a08", border:"1px solid #1c2820", borderRadius:6, padding:"4px 8px", fontSize:10 }}>
+                      <span>{s.icon} {s.label.split(" ")[0]}</span>
+                      {attEff!==null && <span style={{ color:"#7dffb8", marginLeft:5 }}>⚔️{attEff}%</span>}
+                      {defEff!==null && <span style={{ color:"#7ef5e5", marginLeft:4 }}>🛡️{defEff}%</span>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── KREATOR I PILOT MECZU POJEDYNKOWEGO ──────────────────────────────────────
+const EMPTY_DUEL_WIZ = () => ({
+  step: "setup",   // setup → pilot → done
+  date: new Date().toISOString().slice(0,10),
+  teamAName: "Team A", teamBName: "Team B",
+  teamA: [], teamB: [],
+  matchId: Date.now() + Math.random(),
+  setOrder: null,        // zostanie wylosowane przy starcie pilota
+  currentSetIdx: 0,
+  sets: [],              // ukończone sety: [{setType, pairs, attempts, ptsA, ptsB, winner}]
+  activePilot: null,     // {setType, pairs, currentPairIdx, currentRole, attempts}
+  penaltyRound: false,   // czy trwa dogrywka karnych
+  penaltyAttempts: [],
+});
+
+function DuelWizard({ players, duelMatches, onSave, onCancel }) {
+  const [wiz, setWiz] = useState(EMPTY_DUEL_WIZ());
+  const W = (u) => setWiz(w => ({...w, ...u}));
+  const realPlayers = players.filter(p => !p.random);
+  const nameOf = (id) => players.find(x=>x.id===id)?.name || id;
+
+  // ── KROK 1: Ustawienie składów ───────────────────────────────────────────
+  if (wiz.step === "setup") {
+    const togglePlayer = (id, side) => {
+      const otherSide = side==="A" ? wiz.teamB : wiz.teamA;
+      if (otherSide.includes(id)) return; // gracz już w przeciwnym teamie
+      const cur = side==="A" ? wiz.teamA : wiz.teamB;
+      const next = cur.includes(id) ? cur.filter(x=>x!==id) : [...cur, id];
+      W(side==="A" ? {teamA:next} : {teamB:next});
+    };
+    const canStart = wiz.teamA.length >= 1 && wiz.teamB.length >= 1;
+
+    return (
+      <div style={{ marginTop:16 }}>
+        <div style={{ display:"flex", alignItems:"center", gap:10, marginBottom:20 }}>
+          <button onClick={onCancel} style={{ background:"transparent", border:"1px solid #2a3d2f", borderRadius:8, color:"#4a6b56", padding:"6px 10px", cursor:"pointer", fontSize:13 }}>✕</button>
+          <div style={{ fontSize:16, fontWeight:900, color:"#e7f5ec" }}>⚡ Nowy mecz pojedynkowy</div>
+        </div>
+
+        <div style={CARD}>
+          <div style={LABEL}>DATA MECZU</div>
+          <input type="date" value={wiz.date} onChange={e=>W({date:e.target.value})} style={INP} />
+        </div>
+
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10, marginBottom:14 }}>
+          {["A","B"].map(side => (
+            <div key={side} style={{ ...CARD, margin:0, borderColor:side==="A"?"#15803d":"#0e7490" }}>
+              <div style={{ marginBottom:8 }}>
+                <input value={side==="A"?wiz.teamAName:wiz.teamBName} maxLength={20}
+                  onChange={e=>W(side==="A"?{teamAName:e.target.value}:{teamBName:e.target.value})}
+                  style={{ ...INP, fontSize:13, fontWeight:800, color:side==="A"?"#7dffb8":"#7ef5e5", padding:"6px 8px" }} />
+              </div>
+              <div style={{ fontSize:10, color:"#4a6b56", marginBottom:6 }}>Wybierz zawodników:</div>
+              {realPlayers.map(p => {
+                const inThis = (side==="A"?wiz.teamA:wiz.teamB).includes(p.id);
+                const inOther = (side==="A"?wiz.teamB:wiz.teamA).includes(p.id);
+                return (
+                  <button key={p.id} onClick={() => !inOther && togglePlayer(p.id, side)}
+                    style={{ display:"block", width:"100%", textAlign:"left", padding:"6px 8px", marginBottom:3, borderRadius:6, border:`1px solid ${inThis?(side==="A"?"#15803d":"#0e7490"):inOther?"#334155":"#2a3d2f"}`, background:inThis?(side==="A"?"rgba(21,128,61,.15)":"rgba(14,116,144,.15)"):"transparent", color:inThis?"#e7f5ec":inOther?"#334155":"#64748b", fontSize:12, fontWeight:inThis?700:400, cursor:inOther?"not-allowed":"pointer" }}>
+                    {p.name} {inOther?"(już w teamie)":""}
+                  </button>
+                );
+              })}
+              <div style={{ fontSize:10, color:side==="A"?"#7dffb8":"#7ef5e5", marginTop:6, fontWeight:700 }}>
+                {(side==="A"?wiz.teamA:wiz.teamB).length} zawodników
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <button onClick={() => {
+          const setOrder = shuffleSets(wiz.matchId);
+          const firstSet = setOrder[0];
+          const pairs = drawPairs(wiz.teamA, wiz.teamB, wiz.matchId, 0);
+          W({ step:"pilot", setOrder, activePilot:{ setType:firstSet, pairs, currentPairIdx:0, currentRole:"attack", attempts:[] } });
+        }} disabled={!canStart}
+          style={{ width:"100%", padding:"14px", background:canStart?"linear-gradient(135deg,#16a34a,#00ff85)":"#1c2820", border:"none", borderRadius:10, color:canStart?"#06150c":"#334155", fontSize:15, fontWeight:800, cursor:canStart?"pointer":"not-allowed" }}>
+          ▶ Losuj sety i zacznij mecz
+        </button>
+      </div>
+    );
+  }
+
+  // ── KROK 2: Pilot (live) ─────────────────────────────────────────────────
+  if (wiz.step === "pilot" && wiz.activePilot) {
+    const { setType, pairs, currentPairIdx, currentRole, attempts } = wiz.activePilot;
+    const setInfo = SET_LABELS[setType];
+    const pair = pairs[currentPairIdx];
+    const isIdle = pair?.idle;
+    const isCrossbar = setType === "crossbar";
+
+    // Atakujący/broniący w tej próbie
+    const attackerId = currentRole==="attack" ? pair?.a : pair?.b;
+    const defenderId = currentRole==="attack" ? pair?.b : pair?.a;
+    // W crossbarze nie ma "broniącego" — tylko atakujący
+    const completedSets = wiz.sets.length;
+    const totalActivePairs = pairs.filter(p=>!p.idle);
+
+    const recordAttempt = (winningSide) => {
+      const newAttempts = [...attempts, { pairIdx:currentPairIdx, role:currentRole, attackerId, defenderId, setType, winningSide }];
+
+      // Czy ta para skończyła obie próby? (w crossbarze tylko 1 próba per para)
+      const pairDone = isCrossbar ? true : currentRole==="defend";
+
+      let nextPairIdx = currentPairIdx;
+      let nextRole = currentRole;
+
+      if (pairDone) {
+        // Przejdź do kolejnej pary (pomijając idle)
+        let next = currentPairIdx + 1;
+        while (next < pairs.length && pairs[next].idle) next++;
+        nextPairIdx = next;
+        nextRole = "attack";
+      } else {
+        nextRole = "defend"; // ta sama para, zamiana ról
+      }
+
+      // Czy set się skończył?
+      if (nextPairIdx >= pairs.length) {
+        const score = calcSetScore(newAttempts, setType);
+        const finishedSet = { setType, ptsA:score.ptsA, ptsB:score.ptsB, winner:score.winner, attempts:newAttempts };
+        const newSets = [...wiz.sets, finishedSet];
+        const nextSetIdx = newSets.length;
+
+        if (nextSetIdx >= 4) {
+          // Mecz skończony — sprawdź wynik
+          const matchResult = calcDuelMatchResult(newSets);
+          if (matchResult.winner==="draw") {
+            // Dogrywka karna
+            W({ sets:newSets, activePilot:null, penaltyRound:true, penaltyAttempts:[], step:"penalty" });
+          } else {
+            W({ sets:newSets, activePilot:null, step:"done", finalResult:matchResult });
+          }
+        } else {
+          // Kolejny set
+          const nextSetType = wiz.setOrder[nextSetIdx];
+          const nextPairs = drawPairs(wiz.teamA, wiz.teamB, wiz.matchId, nextSetIdx);
+          W({ sets:newSets, currentSetIdx:nextSetIdx, activePilot:{ setType:nextSetType, pairs:nextPairs, currentPairIdx:0, currentRole:"attack", attempts:[] } });
+        }
+      } else {
+        W({ activePilot:{ ...wiz.activePilot, attempts:newAttempts, currentPairIdx:nextPairIdx, currentRole:nextRole } });
+      }
+    };
+
+    // Oblicz bieżące punkty (live preview)
+    const liveScore = calcSetScore(attempts, setType);
+    const setProgress = `${Math.min(currentPairIdx, totalActivePairs.length)}/${totalActivePairs.length}`;
+
+    return (
+      <div style={{ marginTop:16 }}>
+        {/* Nagłówek meczu */}
+        <div style={{ ...CARD, marginBottom:10 }}>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <div style={{ fontSize:12, color:"#4a6b56" }}>Set {completedSets+1}/4</div>
+            <div style={{ display:"flex", gap:6 }}>
+              {(wiz.setOrder||[]).map((st,i) => {
+                const done = i < completedSets;
+                const active = i === completedSets;
+                const info = SET_LABELS[st];
+                return <span key={i} style={{ fontSize:11, fontWeight:700, color:done?"#22c55e":active?"#00ff85":"#2a3d2f", padding:"2px 6px", borderRadius:4, background:active?"rgba(0,255,133,.12)":"transparent", border:active?"1px solid #00ff85":"1px solid transparent" }}>{info?.icon}{active?" "+info?.label:""}</span>;
+              })}
+            </div>
+          </div>
+        </div>
+
+        {/* Typ seta */}
+        <div style={{ textAlign:"center", marginBottom:16 }}>
+          <div style={{ fontSize:32 }}>{setInfo?.icon}</div>
+          <div style={{ fontSize:20, fontWeight:900, color:"#e7f5ec" }}>{setInfo?.label}</div>
+          <div style={{ fontSize:11, color:"#4a6b56" }}>para {setProgress}</div>
+        </div>
+
+        {/* Live wynik seta */}
+        <div style={{ display:"flex", justifyContent:"center", gap:24, marginBottom:20 }}>
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontSize:11, color:"#7dffb8", fontWeight:700 }}>{wiz.teamAName}</div>
+            <div style={{ fontSize:36, fontWeight:900, color:"#7dffb8" }}>{liveScore.ptsA}</div>
+          </div>
+          <div style={{ fontSize:22, color:"#2a3d2f", alignSelf:"center" }}>:</div>
+          <div style={{ textAlign:"center" }}>
+            <div style={{ fontSize:11, color:"#7ef5e5", fontWeight:700 }}>{wiz.teamBName}</div>
+            <div style={{ fontSize:36, fontWeight:900, color:"#7ef5e5" }}>{liveScore.ptsB}</div>
+          </div>
+        </div>
+
+        {/* Obecna para */}
+        {isIdle ? (
+          <div style={{ ...CARD, textAlign:"center" }}>
+            <div style={{ fontSize:13, color:"#4a6b56" }}>⏸ Zawodnik bezczynny w tej rundzie</div>
+            <div style={{ fontSize:15, fontWeight:800, color:"#e7f5ec", margin:"8px 0" }}>{nameOf(pair.a||pair.b)}</div>
+            <button onClick={() => {
+              let next = currentPairIdx + 1;
+              while (next < pairs.length && pairs[next].idle) next++;
+              if (next >= pairs.length) {
+                // Koniec par — zakończ set z bieżącymi punktami
+                recordAttempt(null);
+              } else {
+                W({ activePilot:{...wiz.activePilot, currentPairIdx:next} });
+              }
+            }} style={{ background:"#2a3d2f", border:"none", borderRadius:8, color:"#7dffb8", padding:"10px 20px", fontSize:13, fontWeight:700, cursor:"pointer" }}>
+              Dalej →
+            </button>
+          </div>
+        ) : (
+          <div style={CARD}>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr auto 1fr", alignItems:"center", gap:10, marginBottom:16 }}>
+              <div style={{ textAlign:"center", padding:12, background:"rgba(0,255,133,.06)", borderRadius:8, border:"1px solid #15803d" }}>
+                <div style={{ fontSize:9, color:"#4a6b56", marginBottom:4 }}>ATAKUJE{!isCrossbar?" / ŚW:":""}:</div>
+                <div style={{ fontSize:16, fontWeight:900, color:"#7dffb8" }}>{nameOf(attackerId)}</div>
+                <div style={{ fontSize:10, color:"#4a6b56", marginTop:2 }}>{currentRole==="attack"?wiz.teamAName:wiz.teamBName}</div>
+              </div>
+              <div style={{ fontSize:14, color:"#2a3d2f", fontWeight:700 }}>VS</div>
+              <div style={{ textAlign:"center", padding:12, background:"rgba(0,217,192,.06)", borderRadius:8, border:`1px solid ${isCrossbar?"#2a3d2f":"#0e7490"}` }}>
+                {isCrossbar ? (
+                  <div style={{ color:"#4a6b56", fontSize:12 }}>—<br/>poprzeczka</div>
+                ) : (
+                  <>
+                    <div style={{ fontSize:9, color:"#4a6b56", marginBottom:4 }}>BRONI:</div>
+                    <div style={{ fontSize:16, fontWeight:900, color:"#7ef5e5" }}>{nameOf(defenderId)}</div>
+                    <div style={{ fontSize:10, color:"#4a6b56", marginTop:2 }}>{currentRole==="attack"?wiz.teamBName:wiz.teamAName}</div>
+                  </>
+                )}
+              </div>
+            </div>
+
+            {/* Przyciski wyniku */}
+            {isCrossbar ? (
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                <button onClick={() => recordAttempt(currentRole==="attack"?(attackerId===pair.a?"A":"B"):null)}
+                  style={{ padding:"18px", background:"rgba(0,255,133,.15)", border:"2px solid #00ff85", borderRadius:10, color:"#7dffb8", fontSize:14, fontWeight:800, cursor:"pointer" }}>
+                  🏹 Trafił
+                </button>
+                <button onClick={() => recordAttempt(null)}
+                  style={{ padding:"18px", background:"rgba(239,68,68,.1)", border:"2px solid #ef4444", borderRadius:10, color:"#fca5a5", fontSize:14, fontWeight:800, cursor:"pointer" }}>
+                  ✗ Nie trafił
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div style={{ fontSize:10, color:"#4a6b56", textAlign:"center", marginBottom:10 }}>
+                  {currentRole==="attack" ? `${nameOf(attackerId)} atakuje — co się stało?` : `Zamiana ról — ${nameOf(pair.b)} atakuje`}
+                </div>
+                <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+                  <button onClick={() => recordAttempt(currentRole==="attack"?(pair.a===attackerId?"A":"B"):(pair.b===attackerId?"B":"A"))}
+                    style={{ padding:"18px", background:"rgba(0,255,133,.15)", border:"2px solid #00ff85", borderRadius:10, color:"#7dffb8", fontSize:14, fontWeight:800, cursor:"pointer" }}>
+                    ⚽ Gol!
+                  </button>
+                  <button onClick={() => recordAttempt(currentRole==="attack"?(pair.a===attackerId?"B":"A"):(pair.b===attackerId?"A":"B"))}
+                    style={{ padding:"18px", background:"rgba(0,217,192,.1)", border:"2px solid #00d9c0", borderRadius:10, color:"#7ef5e5", fontSize:14, fontWeight:800, cursor:"pointer" }}>
+                    🧤 Obrona/Pudło
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Ukończone sety */}
+        {wiz.sets.length > 0 && (
+          <div style={{ marginTop:14, display:"flex", gap:6, flexWrap:"wrap" }}>
+            {wiz.sets.map((s,i) => {
+              const st = SET_LABELS[s.setType];
+              return (
+                <div key={i} style={{ background:"#070a08", border:`1px solid ${s.winner==="A"?"#15803d":s.winner==="B"?"#0e7490":"#2a3d2f"}`, borderRadius:6, padding:"4px 10px", fontSize:10 }}>
+                  {st?.icon} <span style={{ fontWeight:700 }}>{s.ptsA}:{s.ptsB}</span>
+                  <span style={{ color:s.winner==="A"?"#7dffb8":s.winner==="B"?"#7ef5e5":"#f59e0b", marginLeft:4 }}>
+                    {s.winner==="A"?wiz.teamAName:s.winner==="B"?wiz.teamBName:"R"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── Dogrywka karna ───────────────────────────────────────────────────────
+  if (wiz.step === "penalty") {
+    const penPairs = drawPairs(wiz.teamA, wiz.teamB, wiz.matchId + "pen", 0).filter(p=>!p.idle);
+    const [penIdx, setPenIdx] = useState(0);
+    const [penRole, setPenRole] = useState("attack");
+    const [penAttempts, setPenAttempts] = useState([]);
+
+    const recordPen = (winningSide) => {
+      const newAttempts = [...penAttempts, { winningSide }];
+      const done = penRole==="defend";
+      if (done) {
+        const nextIdx = penIdx + 1;
+        if (nextIdx >= penPairs.length) {
+          // Koniec dogrywki — policz
+          let pA=0, pB=0;
+          newAttempts.forEach(a=>{ if(a.winningSide==="A")pA++; else if(a.winningSide==="B")pB++; });
+          const penWinner = pA>pB?"A":pB>pA?"B":"draw";
+          W({ step:"done", finalResult:{ ...calcDuelMatchResult(wiz.sets), penaltyWinner:penWinner } });
+        } else {
+          setPenIdx(nextIdx); setPenRole("attack"); setPenAttempts(newAttempts);
+        }
+      } else {
+        setPenRole("defend"); setPenAttempts(newAttempts);
+      }
+    };
+
+    const pair = penPairs[penIdx]||{};
+    const attackerId = penRole==="attack"?pair.a:pair.b;
+    return (
+      <div style={{ marginTop:16 }}>
+        <div style={{ textAlign:"center", marginBottom:20 }}>
+          <div style={{ fontSize:28 }}>🥅</div>
+          <div style={{ fontSize:18, fontWeight:900, color:"#e7f5ec" }}>Dogrywka — Rzuty karne</div>
+          <div style={{ fontSize:11, color:"#4a6b56" }}>para {penIdx+1}/{penPairs.length}</div>
+        </div>
+        <div style={{ ...CARD, textAlign:"center" }}>
+          <div style={{ fontSize:15, fontWeight:800, color:penRole==="attack"?"#7dffb8":"#7ef5e5", marginBottom:12 }}>
+            {players.find(x=>x.id===attackerId)?.name||attackerId} ({penRole==="attack"?(pair.a===attackerId?wiz.teamAName:wiz.teamBName):(pair.b===attackerId?wiz.teamBName:wiz.teamAName)}) wykonuje karnego
+          </div>
+          <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:10 }}>
+            <button onClick={() => recordPen(pair.a===attackerId?"A":"B")}
+              style={{ padding:"16px", background:"rgba(0,255,133,.15)", border:"2px solid #00ff85", borderRadius:10, color:"#7dffb8", fontSize:14, fontWeight:800, cursor:"pointer" }}>⚽ Gol</button>
+            <button onClick={() => recordPen(pair.a===attackerId?"B":"A")}
+              style={{ padding:"16px", background:"rgba(0,217,192,.1)", border:"2px solid #00d9c0", borderRadius:10, color:"#7ef5e5", fontSize:14, fontWeight:800, cursor:"pointer" }}>🧤 Obroniony</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Koniec meczu — zapis ─────────────────────────────────────────────────
+  if (wiz.step === "done") {
+    const res = wiz.finalResult || {};
+    const winnerName = res.winner==="A"?wiz.teamAName:res.winner==="B"?wiz.teamBName:"Remis";
+    const winColor = res.winner==="A"?"#7dffb8":res.winner==="B"?"#7ef5e5":"#f59e0b";
+
+    const saveMatch = () => {
+      const matchId = wiz.matchId;
+      const dm = {
+        id: matchId, date:wiz.date,
+        teamA:wiz.teamA, teamB:wiz.teamB,
+        teamAName:wiz.teamAName, teamBName:wiz.teamBName,
+        setOrder:wiz.setOrder, sets:wiz.sets,
+        result:{ ...res },
+      };
+      const nextDuelMatches = [...duelMatches, dm];
+
+      // Zaktualizuj statystyki per zawodnik (pole duels[])
+      const nextPlayers = players.map(p => {
+        const inA = wiz.teamA.includes(p.id);
+        const inB = wiz.teamB.includes(p.id);
+        if (!inA && !inB) return p;
+        const side = inA ? "A" : "B";
+        const won = res.winner===side || (res.winner==="draw" && res.penaltyWinner===side);
+        const draw = res.winner==="draw" && !res.penaltyWinner;
+        // Zbierz setResults dla tego zawodnika
+        const setResults = wiz.sets.flatMap(s => {
+          const relevant = (s.attempts||[]).filter(at => at.attackerId===p.id || at.defenderId===p.id);
+          return relevant.map(at => {
+            const asAttacker = at.attackerId===p.id;
+            const myTeamWon = at.winningSide === (inA?"A":"B");
+            return { setType:s.setType, as:asAttacker?"attacker":"defender", won:myTeamWon };
+          });
+        });
+        const duelEntry = { matchId, side, won, draw, setResults };
+        return { ...p, duels:[...(p.duels||[]), duelEntry] };
+      });
+
+      onSave(nextDuelMatches, nextPlayers);
+    };
+
+    return (
+      <div style={{ marginTop:16, textAlign:"center" }}>
+        <div style={{ fontSize:40, marginBottom:10 }}>🏆</div>
+        <div style={{ fontSize:22, fontWeight:900, color:winColor, marginBottom:6 }}>
+          {res.winner==="draw"?"🤝 Remis":`Wygrywa ${winnerName}!`}
+        </div>
+        <div style={{ fontSize:28, fontWeight:900, marginBottom:20 }}>
+          <span style={{ color:"#7dffb8" }}>{res.setA}</span>
+          <span style={{ color:"#2a3d2f", margin:"0 10px" }}>:</span>
+          <span style={{ color:"#7ef5e5" }}>{res.setB}</span>
+          {res.penaltyWinner && <span style={{ fontSize:12, color:"#4a6b56", display:"block", marginTop:4 }}>po karnych: {res.penaltyWinner==="A"?wiz.teamAName:wiz.teamBName}</span>}
+        </div>
+        <div style={{ display:"flex", justifyContent:"center", gap:8, marginBottom:24, flexWrap:"wrap" }}>
+          {wiz.sets.map((s,i) => {
+            const st = SET_LABELS[s.setType];
+            return (
+              <div key={i} style={{ background:"#070a08", border:`1px solid ${s.winner==="A"?"#15803d":s.winner==="B"?"#0e7490":"#2a3d2f"}`, borderRadius:8, padding:"8px 12px", textAlign:"center" }}>
+                <div style={{ fontSize:14 }}>{st?.icon}</div>
+                <div style={{ fontSize:10, color:"#4a6b56" }}>{st?.label}</div>
+                <div style={{ fontSize:15, fontWeight:800, color:s.winner==="A"?"#7dffb8":s.winner==="B"?"#7ef5e5":"#f59e0b" }}>{s.ptsA}:{s.ptsB}</div>
+              </div>
+            );
+          })}
+        </div>
+        <button onClick={saveMatch}
+          style={{ width:"100%", padding:"14px", background:"linear-gradient(135deg,#16a34a,#00ff85)", border:"none", borderRadius:10, color:"#06150c", fontSize:15, fontWeight:800, cursor:"pointer", marginBottom:10 }}>
+          💾 Zapisz mecz
+        </button>
+        <button onClick={onCancel}
+          style={{ width:"100%", padding:"12px", background:"transparent", border:"1px solid #2a3d2f", borderRadius:10, color:"#4a6b56", fontSize:13, cursor:"pointer" }}>
+          Anuluj (nie zapisuj)
+        </button>
+      </div>
+    );
+  }
+
+  return null;
+}
 
 function ModeSelect({ onChoose }) {
   return (

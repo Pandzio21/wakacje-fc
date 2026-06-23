@@ -34,20 +34,12 @@ export const MAX_VALUE = 400_000_000;          // twardy sufit wartości rynkowe
 export const TOP_TIER_FLOOR = 380_000_000;     // od tego progu obowiązuje zaostrzony reżim spadków
 export const TOP_TIER_MIN_RATING = 9.0;        // ocena wymagana, by NIE tracić na wartości blisko limitu
 export const TOP_TIER_DROP_MULT = 4;           // mnożnik spadku wartości poniżej wymaganej oceny
-export const MAX_GAIN_PER_MATCH = 10_000_000;  // twardy limit wzrostu wartości za pojedynczy mecz (pct + viral razem)
+export const MAX_GAIN_PER_MATCH = 10_000_000;
 
 // ─── DOGANIANIE NISKICH WARTOŚCI ───────────────────────────────────────────────
-// Im niżej wyceniony zawodnik, tym mocniej każdy mecz przekłada się procentowo na jego wartość
-// (łatwiej nadrobić dystans), bez zmiany matematyki dla średnich/wysokich wartości.
-export const CATCHUP_FLOOR = 5_000_000;   // poniżej tej wartości — najsilniejsze wzmocnienie
-export const CATCHUP_CEIL  = 40_000_000;  // od tej wartości w górę — brak dodatkowego wzmocnienia (oryginalne tempo)
-export const CATCHUP_MAX_MULT = 2.2;      // maksymalny mnożnik tempa zmian tuż przy CATCHUP_FLOOR
-
-// ─── VIRAL MOMENT (losowy bonus po dobrym meczu) ──────────────────────────────
-export const VIRAL_MIN_RATING = 7.5;   // próg oceny meczu, od którego jest szansa na "viral moment"
-export const VIRAL_CHANCE = 0.18;      // szansa na wystąpienie przy spełnionym progu oceny
-export const VIRAL_BONUS_MIN = 0.04;   // min. jednorazowy bonus (% obecnej wartości)
-export const VIRAL_BONUS_MAX = 0.09;   // maks. jednorazowy bonus (% obecnej wartości)
+export const CATCHUP_FLOOR = 5_000_000;
+export const CATCHUP_CEIL  = 40_000_000;
+export const CATCHUP_MAX_MULT = 2.2;
 
 export const DEFAULT_CRITERIA = [
   { id:"goal",             label:"⚽ Gol",               desc:"Trafił do siatki",                      points:0.40,  cat:"pos" },
@@ -146,7 +138,6 @@ export function applyGoalToCriteria(crit, g, id) {
 export const clamp = (v, a, b) => Math.min(Math.max(v, a), b);
 
 // Deterministyczny generator pseudolosowy oparty o string seed (np. id meczu + id zawodnika).
-// Dzięki temu "losowe" zdarzenia (viral moment) są STABILNE między odświeżeniami strony —
 // ten sam mecz zawsze da ten sam wynik, zamiast migać losowo przy każdym renderze.
 function seededRand01(seed) {
   let h = 2166136261 >>> 0;
@@ -177,21 +168,7 @@ export function getAvgRating(matches) {
   return v.reduce((a, b) => a + b, 0) / v.length;
 }
 
-// Bonus formy: +30% wartości przy spełnieniu kryteriów ostatnich meczów
-export function checkFormBonus(player) {
-  const ms = player.matches; const v = player.value;
-  if (!ms || ms.length < 2) return false;
-  const recentN = (n) => ms.slice(-n);
-  const contrib = (m) => {
-    const c = m.criteria || {};
-    return parseInt(c.goal||0)+parseInt(c.screamer||0)+parseInt(c.freekick||0)+parseInt(c.header||0)+parseInt(c.assist||0);
-  };
-  if (v <= 10e6)      { const r = recentN(2); return r.length===2 && r.every(m => contrib(m)>=1 || safeR(m)>7.5); }
-  else if (v <= 30e6) { const r = recentN(3); return r.length===3 && r.every(m => contrib(m)>=1 || safeR(m)>7.5); }
-  else if (v <= 100e6){ const r = recentN(3); return r.length===3 && r.every(m => contrib(m)>=2 || safeR(m)>8.2); }
-  else                { const r = recentN(3); return r.length===3 && r.every(m => contrib(m)>=3 || safeR(m)>9.2); }
-}
-
+// (Bonus formy i momentum usunięte — były niefair dla rzadziej grających zawodników)
 // Mnożnik tempa zmian dla niskich wartości — im bliżej CATCHUP_FLOOR, tym mocniej
 // każdy mecz przekłada się na wartość (łatwiej nadrobić dystans). Liniowo zanika do 1.0 przy CATCHUP_CEIL.
 export function catchupMult(cur) {
@@ -226,7 +203,6 @@ export function getSessionChangePct(cur, rd, rating) {
 // Wartość liczona z listy meczów (posortowanej chronologicznie) + opinii + zdarzeń sezonowych
 // seasonEvents: [{ date, type:"divide3" }, { date, type:"bonus", amount }] — stosowane chronologicznie
 // razem z meczami (po dacie), niezależnie od wyniku meczów z tego samego dnia.
-// playerId: używany jako część seeda dla deterministycznych "losowych" zdarzeń (viral moment) —
 // bez niego dwóch graczy z identycznym przebiegiem meczu losowałoby to samo, co jest nierealistyczne.
 export function calcValueFrom(base, matches, opinions, seasonEvents, playerId) {
   const ms = [...(matches || [])].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
@@ -251,17 +227,7 @@ export function calcValueFrom(base, matches, opinions, seasonEvents, playerId) {
       const pct = getSessionChangePct(cur, rd, r);
       const before = cur;
       cur = clamp(cur + Math.round(cur * pct), 100_000, MAX_VALUE);
-
-      // ── VIRAL MOMENT: losowa (ale deterministyczna) szansa na jednorazowy bonus po dobrym meczu ──
-      if (r >= VIRAL_MIN_RATING && cur < MAX_VALUE) {
-        const seed = `${pid}|viral|${s.m.id ?? s.date}`;
-        if (seededRand01(seed) < VIRAL_CHANCE) {
-          const bonusPct = VIRAL_BONUS_MIN + seededRand01(seed + "|pct") * (VIRAL_BONUS_MAX - VIRAL_BONUS_MIN);
-          cur = clamp(cur + Math.round(cur * bonusPct), 100_000, MAX_VALUE);
-        }
-      }
-
-      // Twardy limit: wzrost wartości w POJEDYNCZYM meczu (pct + viral razem) nie może przekroczyć MAX_GAIN_PER_MATCH.
+      // Twardy limit: wzrost wartości w pojedynczym meczu.
       if (cur - before > MAX_GAIN_PER_MATCH) cur = clamp(before + MAX_GAIN_PER_MATCH, 100_000, MAX_VALUE);
     } else if (s.kind === "event") {
       if (s.e.type === "divide3") cur = Math.max(Math.round(cur / 3), 100_000);
@@ -269,12 +235,6 @@ export function calcValueFrom(base, matches, opinions, seasonEvents, playerId) {
     }
   });
 
-  if (checkFormBonus({ matches: ms, value: base })) cur = Math.min(Math.round(cur * 1.30), MAX_VALUE);
-  const rec = ms.slice(-3);
-  if (rec.length) {
-    const ra = rec.reduce((s, m) => s + safeR(m), 0) / rec.length;
-    cur = clamp(Math.round(cur * (1 + clamp((ra - BASE_RATING) * 0.005, -0.02, 0.02))), 100_000, MAX_VALUE);
-  }
   let op = 0; ops.forEach(o => { if (o.sentiment === "positive") op += 0.02; if (o.sentiment === "negative") op -= 0.02; });
   return clamp(Math.round(cur * (1 + clamp(op, -0.10, 0.10))), 100_000, MAX_VALUE);
 }
@@ -300,9 +260,9 @@ export function valueAtDateExSeasonRollover(player, cutoffStr, excludeSeasonIdx)
   return calcValueFrom(player.value, ms, ops, evs, player.id);
 }
 
-// Przebieg wartości mecz-po-meczu, spójny z calcValueFrom (uwzględnia viral moment i twardy limit wzrostu/mecz).
-// Zwraca listę meczów wzbogaconą o {rating, valDelta, valPct, viral} — do wyświetlenia w historii zawodnika.
-// UWAGA: to NIE uwzględnia efektów post-pętli (bonus formy, momentum ostatnich 3 meczów, opinie) —
+// Przebieg wartości mecz-po-meczu, spójny z calcValueFrom.
+// Zwraca listę meczów wzbogaconą o {rating, valDelta, valPct} — do wyświetlenia w historii zawodnika.
+// UWAGA: to NIE uwzględnia efektów post-pętli (opinie) —
 // te liczone są raz na końcu calcValue(), nie per-mecz, więc suma delt stąd może się nieznacznie różnić od calcValue(p).
 export function matchByMatchWalk(player) {
   const ms = [...(player.matches || [])].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
@@ -315,22 +275,13 @@ export function matchByMatchWalk(player) {
     const before = cur;
     cur = clamp(cur + Math.round(cur * pct), 100_000, MAX_VALUE);
 
-    let viral = false;
-    if (r >= VIRAL_MIN_RATING && cur < MAX_VALUE) {
-      const seed = `${pid}|viral|${m.id ?? m.date}`;
-      if (seededRand01(seed) < VIRAL_CHANCE) {
-        const bonusPct = VIRAL_BONUS_MIN + seededRand01(seed + "|pct") * (VIRAL_BONUS_MAX - VIRAL_BONUS_MIN);
-        cur = clamp(cur + Math.round(cur * bonusPct), 100_000, MAX_VALUE);
-        viral = true;
-      }
-    }
 
-    // Twardy limit: wzrost wartości w POJEDYNCZYM meczu (pct + viral razem) nie może przekroczyć MAX_GAIN_PER_MATCH.
+    // Twardy limit: wzrost wartości w pojedynczym meczu.
     if (cur - before > MAX_GAIN_PER_MATCH) cur = clamp(before + MAX_GAIN_PER_MATCH, 100_000, MAX_VALUE);
 
     const delta = cur - before;
     const ps = before > 0 ? ((delta / before) * 100).toFixed(1) : "0";
-    return { ...m, rating: r, valDelta: delta, valPct: ps, viral };
+    return { ...m, rating: r, valDelta: delta, valPct: ps };
   });
 }
 
@@ -576,7 +527,7 @@ export function normalizePlayers(loaded) {
       random: isRnd,
       matches: (ex && Array.isArray(ex.matches)) ? ex.matches : [],
       opinions: (ex && Array.isArray(ex.opinions)) ? ex.opinions : [],
-      seasonEvents: (ex && Array.isArray(ex.seasonEvents)) ? ex.seasonEvents : [],
+      duels: (ex && Array.isArray(ex.duels)) ? ex.duels : [],
     };
   });
   return [...build(PLAYERS, false), ...build(RANDOM_PLAYERS, true)];
@@ -638,4 +589,121 @@ export function metricSeries(player, metric) {
     out.unshift({ x: 0, y: 0, date: ms.length ? ms[0].date : todayStr(), season: ms.length ? seasonIndexOf(ms[0].date) : 1 });
   }
   return out;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  TRYB POJEDYNKI (TEAM VS TEAM) — logika i typy danych
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const DUEL_SET_TYPES = [
+  { id:"1v1",       label:"Sam na sam",          icon:"⚡" },
+  { id:"longshot",  label:"Strzały z dystansu",  icon:"🎯" },
+  { id:"crossbar",  label:"Crossbar Challenge",  icon:"🏹" },
+  { id:"penalty",   label:"Rzuty karne",         icon:"🥅" },
+];
+
+// Losowanie kolejności setów — deterministyczne na podstawie seed (id meczu)
+export function shuffleSets(matchId) {
+  const ids = DUEL_SET_TYPES.map(s => s.id);
+  const seed = String(matchId);
+  // Fisher-Yates z seedem opartym o FNV hash
+  let h = 2166136261 >>> 0;
+  for (let i=0;i<seed.length;i++){h^=seed.charCodeAt(i);h=Math.imul(h,16777619);}
+  const rand = (max, salt) => {
+    let r = h ^ (salt * 2654435761);
+    r = Math.imul(r ^ (r>>>17), 0x45d9f3b);
+    r = Math.imul(r ^ (r>>>15), 0x45d9f3b);
+    return ((r ^ (r>>>13)) >>> 0) % max;
+  };
+  const arr = [...ids];
+  for (let i=arr.length-1;i>0;i--){
+    const j = rand(i+1, i);
+    [arr[i],arr[j]]=[arr[j],arr[i]];
+  }
+  return arr;
+}
+
+// Losowanie par zawodników — każdy z Team A trafia vs losowy z Team B
+// Zwraca tablicę [{a: playerId, b: playerId}], obsługuje nierówne składy (idle)
+export function drawPairs(teamA, teamB, matchId, setIndex) {
+  const seed = `${matchId}|set${setIndex}`;
+  let h = 2166136261 >>> 0;
+  for(let i=0;i<seed.length;i++){h^=seed.charCodeAt(i);h=Math.imul(h,16777619);}
+  const rand = (max, salt) => {
+    let r = h ^ (salt * 2654435761);
+    r = Math.imul(r ^ (r>>>17), 0x45d9f3b);
+    r = Math.imul(r ^ (r>>>15), 0x45d9f3b);
+    return ((r ^ (r>>>13)) >>> 0) % max;
+  };
+
+  const a = [...teamA], b = [...teamB];
+  const pairs = [];
+  // Wyrównaj składy — jeśli nierówne, jeden zawodnik dostaje bye
+  const n = Math.min(a.length, b.length);
+  // Przetasuj B względem A
+  const bShuffled = [...b];
+  for(let i=bShuffled.length-1;i>0;i--){
+    const j=rand(i+1,i+setIndex*100);
+    [bShuffled[i],bShuffled[j]]=[bShuffled[j],bShuffled[i]];
+  }
+  for(let i=0;i<n;i++) pairs.push({a:a[i], b:bShuffled[i]});
+  // Idle — zawodnik z dłuższego teamu czeka
+  if(a.length>b.length) pairs.push({a:a[n], b:null, idle:true, idleSide:"A"});
+  if(b.length>a.length) pairs.push({a:null, b:bShuffled[n]||b[n], idle:true, idleSide:"B"});
+  return pairs;
+}
+
+// Oblicz wynik seta na podstawie tablicy prób
+// Każda próba: {pairIdx, role:"attack"|"defend", winningSide:"A"|"B"|"draw", setType}
+// Dla crossbar: role zawsze "attack", draw niedozwolony (każdy ma swój punkt lub nie)
+export function calcSetScore(attempts, setType) {
+  let ptsA = 0, ptsB = 0;
+  attempts.forEach(at => {
+    if(at.winningSide==="A") ptsA++;
+    else if(at.winningSide==="B") ptsB++;
+  });
+  return {ptsA, ptsB, winner: ptsA>ptsB?"A":ptsB>ptsA?"B":"draw"};
+}
+
+// Oblicz wynik meczu pojedynkowego (4 sety → punkty setowe)
+export function calcDuelMatchResult(sets) {
+  let setA=0, setB=0;
+  sets.forEach(s=>{
+    const {winner}=s;
+    if(winner==="A")setA++;
+    else if(winner==="B")setB++;
+    else{setA+=0.5;setB+=0.5;}
+  });
+  return {setA, setB, winner: setA>setB?"A":setB>setA?"B":"draw"};
+}
+
+// Statystyki zawodnika w trybie Pojedynki
+// duels: lista {matchId, side, setResults:[{setType, as:"attacker"|"defender", won:bool}], won:bool, draw:bool}
+export function computeDuelPlayerStats(player) {
+  const duels = player.duels || [];
+  const stats = {
+    matches:0, wins:0, draws:0, losses:0,
+    bySet:{ "1v1":{att:0,attW:0,def:0,defW:0}, longshot:{att:0,attW:0,def:0,defW:0}, crossbar:{att:0,attW:0,def:0,defW:0}, penalty:{att:0,attW:0,def:0,defW:0} },
+  };
+  duels.forEach(d=>{
+    stats.matches++;
+    if(d.won) stats.wins++;
+    else if(d.draw) stats.draws++;
+    else stats.losses++;
+    (d.setResults||[]).forEach(sr=>{
+      const s=stats.bySet[sr.setType];
+      if(!s) return;
+      if(sr.as==="attacker"){s.att++;if(sr.won)s.attW++;}
+      else{s.def++;if(sr.won)s.defW++;}
+    });
+  });
+  return stats;
+}
+
+// Skrócona skuteczność (%, 0-100) dla danego zawodnika i typu seta
+export function duelEfficiency(stats, setType, role) {
+  const s = stats.bySet?.[setType];
+  if(!s) return null;
+  if(role==="attacker") return s.att>0 ? Math.round(s.attW/s.att*100) : null;
+  return s.def>0 ? Math.round(s.defW/s.def*100) : null;
 }
