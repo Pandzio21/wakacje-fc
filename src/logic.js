@@ -211,7 +211,7 @@ export function calcValueFrom(base, matches, opinions, seasonEvents, playerId) {
   const pid = playerId || "p";
 
   // Łączymy mecze i zdarzenia sezonowe w jeden chronologiczny ciąg kroków.
-  // Przy tej samej dacie zdarzenie sezonowe (np. ÷3 po sezonie) liczy się PRZED meczem tego dnia.
+  // Przy tej samej dacie zdarzenie sezonowe (np. ÷2 po sezonie) liczy się PRZED meczem tego dnia.
   const steps = [
     ...ms.map(m => ({ kind: "match", date: m.date || "", m })),
     ...evs.map(e => ({ kind: "event", date: e.date || "", e })),
@@ -230,7 +230,8 @@ export function calcValueFrom(base, matches, opinions, seasonEvents, playerId) {
       // Twardy limit: wzrost wartości w pojedynczym meczu.
       if (cur - before > MAX_GAIN_PER_MATCH) cur = clamp(before + MAX_GAIN_PER_MATCH, 100_000, MAX_VALUE);
     } else if (s.kind === "event") {
-      if (s.e.type === "divide3") cur = Math.max(Math.round(cur / 3), 100_000);
+      if (s.e.type === "divide3") cur = Math.max(Math.round(cur / 2), 100_000);
+      else if (s.e.type === "vacation_penalty") cur = Math.max(Math.round(cur * 0.90), 100_000); // -10% za sezon na urlopie
       else if (s.e.type === "bonus") cur = clamp(cur + Math.round(s.e.amount || 0), 100_000, MAX_VALUE);
     }
   });
@@ -249,7 +250,7 @@ export function valueAtDate(player, cutoffStr) {
   const evs = (player.seasonEvents || []).filter(e => (e.date || "") <= cutoffStr);
   return calcValueFrom(player.value, ms, ops, evs, player.id);
 }
-// Jak wyżej, ale pomija zdarzenia rollover (÷3 / premie) NALEŻĄCE do danego sezonu.
+// Jak wyżej, ale pomija zdarzenia rollover (÷2 / premie) NALEŻĄCE do danego sezonu.
 // Używane przy liczeniu nagród sezonu X: jego własny rollover (naliczany PO sezonie) nie powinien
 // zniekształcać wartości "na koniec sezonu X" ani być wliczony do "wzrostu wartości w sezonie X".
 export function valueAtDateExSeasonRollover(player, cutoffStr, excludeSeasonIdx) {
@@ -459,7 +460,7 @@ export function computeSeasonAwards(season, players) {
   return { potm, potmWins, played: played.length, scorer, assist, banger, mvp, growth, topValue, ranks, matchOfSeason, matchQuality: best, stat, win };
 }
 
-// ─── ROLLOVER SEZONU (÷3 wartości + premie za nagrody) ────────────────────────
+// ─── ROLLOVER SEZONU (÷2 wartości + premie za nagrody) ────────────────────────
 // Premie pieniężne za wygranie poszczególnych nagród sezonowych.
 export const SEASON_BONUSES = {
   scorer: 10_000_000,   // Król strzelców
@@ -474,7 +475,7 @@ function seasonHasRollover(players, seasonIdx) {
   return players.some(p => !p.random && (p.seasonEvents || []).some(e => e.seasonIdx === seasonIdx && e.type === "divide3"));
 }
 
-// Nalicza ÷3 wartości + premie za nagrody dla WSZYSTKICH zakończonych sezonów,
+// Nalicza ÷2 wartości + premie za nagrody dla WSZYSTKICH zakończonych sezonów,
 // które jeszcze nie zostały przetworzone. Idempotentne — bezpieczne wywoływać przy każdym starcie aplikacji.
 // Zwraca NOWĄ listę zawodników (lub tę samą referencję, jeśli nic nie trzeba było naliczyć).
 export function applySeasonRolloverIfNeeded(players) {
@@ -484,11 +485,11 @@ export function applySeasonRolloverIfNeeded(players) {
 
   let cur = players;
   pending.forEach(season => {
-    const divideDate = addDaysStr(season.end, 1);   // dzień po końcu sezonu: ÷3 dla wszystkich
-    const bonusDate  = addDaysStr(season.end, 2);   // kolejny dzień: premie za nagrody (gwarantowana kolejność po ÷3)
+    const divideDate = addDaysStr(season.end, 1);
+    const bonusDate  = addDaysStr(season.end, 2);
     const awards = computeSeasonAwards(season, cur);
 
-    const bonusByPlayer = {}; // id -> suma premii (mln) za ten sezon
+    const bonusByPlayer = {};
     const addBonus = (p, amount) => { bonusByPlayer[p.id] = (bonusByPlayer[p.id] || 0) + amount; };
     awards.scorer.winners.forEach(p => addBonus(p, SEASON_BONUSES.scorer));
     awards.assist.winners.forEach(p => addBonus(p, SEASON_BONUSES.assist));
@@ -496,10 +497,24 @@ export function applySeasonRolloverIfNeeded(players) {
     awards.growth.winners.forEach(p => addBonus(p, SEASON_BONUSES.growth));
     if (awards.potm) addBonus(awards.potm, SEASON_BONUSES.potm);
 
+    // Którzy zawodnicy rozegrali przynajmniej 1 mecz w tym sezonie
+    const playedInSeason = new Set(
+      season.matches.flatMap(m => [...(m.teamA || []), ...(m.teamB || [])])
+    );
+
     cur = cur.map(p => {
-      if (p.random) return p; // zawodnicy spoza klasy nie biorą udziału w rollover
+      if (p.random) return p;
       const events = [...(p.seasonEvents || [])];
-      events.push({ seasonIdx: season.index, date: divideDate, type: "divide3" });
+      const wasOnPitch = playedInSeason.has(p.id);
+
+      if (wasOnPitch) {
+        // Grał w sezonie → normalne ÷2
+        events.push({ seasonIdx: season.index, date: divideDate, type: "divide3" });
+      } else {
+        // Sezon na urlopie → tylko -10% wartości (łagodniejsza kara)
+        events.push({ seasonIdx: season.index, date: divideDate, type: "vacation_penalty" });
+      }
+
       const bonus = bonusByPlayer[p.id] || 0;
       if (bonus > 0) events.push({ seasonIdx: season.index, date: bonusDate, type: "bonus", amount: bonus });
       return { ...p, seasonEvents: events };
@@ -527,6 +542,7 @@ export function normalizePlayers(loaded) {
       random: isRnd,
       matches: (ex && Array.isArray(ex.matches)) ? ex.matches : [],
       opinions: (ex && Array.isArray(ex.opinions)) ? ex.opinions : [],
+      seasonEvents: (ex && Array.isArray(ex.seasonEvents)) ? ex.seasonEvents : [],
       duels: (ex && Array.isArray(ex.duels)) ? ex.duels : [],
     };
   });
@@ -548,10 +564,10 @@ export function valueSeries(player) {
     season: ms.length ? seasonIndexOf(ms[0].date) : seasonIndexOf(todayStr()),
   }];
   // Łączymy mecze i zdarzenia sezonowe w jeden chronologiczny ciąg kroków,
-  // żeby wykres pokazał zarówno zmiany po meczach, jak i skoki po ÷3 / premiach sezonowych.
+  // żeby wykres pokazał zarówno zmiany po meczach, jak i skoki po ÷2 / premiach sezonowych.
   const steps = [
     ...ms.map(m => ({ kind: "match", date: m.date || "", m })),
-    ...evs.map(e => ({ kind: "event", date: e.date || "", e, label: e.type === "divide3" ? "÷3 po sezonie" : "Premia sezonowa" })),
+    ...evs.map(e => ({ kind: "event", date: e.date || "", e, label: e.type === "divide3" ? "÷2 po sezonie" : e.type === "vacation_penalty" ? "Urlop -10%" : "Premia sezonowa" })),
   ].sort((a, b) => (a.date || "").localeCompare(b.date || "") || (a.kind === b.kind ? 0 : (a.kind === "event" ? -1 : 1)));
 
   steps.forEach((s, idx) => {
@@ -706,4 +722,77 @@ export function duelEfficiency(stats, setType, role) {
   if(!s) return null;
   if(role==="attacker") return s.att>0 ? Math.round(s.attW/s.att*100) : null;
   return s.def>0 ? Math.round(s.defW/s.def*100) : null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  RADAR STATYSTYK — 5 osi jak w EA FC
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Mapowanie kryteriów na osie radaru
+export const RADAR_AXES = [
+  {
+    id: "ATT", label: "Atak", color: "#fbbf24",
+    pos: ["goal","screamer","freekick","header","assist","key_pass"],
+    neg: ["miss","penalty_miss"],
+  },
+  {
+    id: "TEC", label: "Technika", color: "#00ff85",
+    pos: ["nutmeg","skill","dribble_line","rainbow"],
+    neg: ["bad_pass","lost_ball_cheap"],
+  },
+  {
+    id: "TAC", label: "Taktyka", color: "#7ef5e5",
+    pos: ["clutch","tackle"],
+    neg: ["lazy_track","lost_ball_danger","foul_danger"],
+  },
+  {
+    id: "DEF", label: "Defensywa", color: "#a855f7",
+    pos: ["save","save_penalty","save_rebound","gk_rush","gk_sweeper"],
+    neg: ["gk_blunder","gk_wrong_pos","gk_lost_ball","own_goal"],
+  },
+  {
+    id: "CRE", label: "Kreatywność", color: "#f97316",
+    pos: ["gk_assist","key_pass","skill","rainbow","nutmeg"],
+    neg: [],
+  },
+];
+
+// Oblicz wartości radaru dla zawodnika (0-100 per oś)
+// Bazuje na historii meczów — sumuje kryteria per mecz i normalizuje względem liczby meczów
+export function computeRadar(player) {
+  const matches = player.matches || [];
+  if (!matches.length) return RADAR_AXES.map(a => ({ ...a, score: 0, raw: 0 }));
+
+  return RADAR_AXES.map(axis => {
+    let total = 0;
+    matches.forEach(m => {
+      const c = m.criteria || {};
+      axis.pos.forEach(id => { total += parseInt(c[id] || 0) * 2; });
+      axis.neg.forEach(id => { total -= parseInt(c[id] || 0); });
+    });
+    // Normalizuj: ~0.5 zdarzenia na mecz = 50 pkt; skalowanie bardziej konserwatywne dla małych próbek
+    const dampFactor = Math.min(1, Math.log(matches.length + 1) / Math.log(10)); // 1 mecz → 0.30, 10 → 1.0
+    const perMatch = total / matches.length;
+    const rawScore = 50 + perMatch * 20;
+    const score = Math.min(99, Math.max(1, Math.round(rawScore * dampFactor + 50 * (1 - dampFactor))));
+    return { ...axis, score, raw: total };
+  });
+}
+
+// Oblicz sumy absolutne kluczowych statystyk dla zawodnika
+export function computePlayerTotals(player) {
+  const matches = player.matches || [];
+  const sum = (id) => matches.reduce((s, m) => s + parseInt((m.criteria || {})[id] || 0), 0);
+  return {
+    matches: matches.length,
+    goals:    sum("goal") + sum("screamer") + sum("freekick") + sum("header"),
+    assists:  sum("assist"),
+    screamers:sum("screamer"),
+    nutmegs:  sum("nutmeg"),
+    clutch:   sum("clutch"),
+    saves:    sum("save") + sum("save_penalty") + sum("save_rebound"),
+    tackles:  sum("tackle"),
+    miss:     sum("miss") + sum("penalty_miss"),
+    ownGoals: sum("own_goal"),
+  };
 }

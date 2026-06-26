@@ -15,6 +15,7 @@ import {
   matchByMatchWalk, CATCHUP_FLOOR, CATCHUP_CEIL, MAX_GAIN_PER_MATCH,
   DUEL_SET_TYPES, shuffleSets, drawPairs, calcSetScore, calcDuelMatchResult,
   computeDuelPlayerStats, duelEfficiency,
+  RADAR_AXES, computeRadar, computePlayerTotals,
 } from "./logic.js";
 
 // ─── WSPÓLNE STYLE — „Piękni i Młodzi FC" (motyw EA FC 25: zielono-czarny) ─────
@@ -738,7 +739,7 @@ function SeasonCard({ season, players, criteria, defaultOpen, seasonName, readOn
   const curIdx = seasonIndexOf(todayStr());
   const live = season.index===curIdx && !season.completed;
   const rangeTxt = season.start ? `${fmtPL(season.start)} – ${fmtPL(season.end)}` : `start projektu – ${fmtPL(season.end)}`;
-  const rolledOver = season.completed && players.some(p => !p.random && (p.seasonEvents||[]).some(e => e.seasonIdx===season.index && e.type==="divide3"));
+  const rolledOver = season.completed && players.some(p => !p.random && (p.seasonEvents||[]).some(e => e.seasonIdx===season.index && (e.type==="divide3" || e.type==="vacation_penalty")));
 
   const startEdit = (e) => { e.stopPropagation(); setNameDraft(seasonName || ""); setEditingName(true); };
   const saveEdit = (e) => { e.stopPropagation(); onRename?.(season.index, nameDraft); setEditingName(false); };
@@ -782,7 +783,7 @@ function SeasonCard({ season, players, criteria, defaultOpen, seasonName, readOn
             )}
             {live && <span style={{ fontSize:9, fontWeight:800, color:"#fff", background:"#ef4444", borderRadius:4, padding:"2px 6px" }}>● NA ŻYWO</span>}
             {!live && season.completed && <span style={{ fontSize:9, fontWeight:700, color:"#475569", border:"1px solid #2a3d2f", borderRadius:4, padding:"2px 6px" }}>zakończony</span>}
-            {rolledOver && <span title="Wartości zostały podzielone przez 3, a premie za nagrody naliczone" style={{ fontSize:9, fontWeight:700, color:"#22c55e", border:"1px solid #166534", borderRadius:4, padding:"2px 6px" }}>✓ rozliczony (÷3 + premie)</span>}
+            {rolledOver && <span title="Wartości zostały podzielone przez 2, a premie za nagrody naliczone" style={{ fontSize:9, fontWeight:700, color:"#22c55e", border:"1px solid #166534", borderRadius:4, padding:"2px 6px" }}>✓ rozliczony (÷2 + premie)</span>}
           </div>
           <div style={{ fontSize:11, color:"#64748b", marginTop:2 }}>{rangeTxt} · {season.matches.length} {season.matches.length===1?"mecz":"meczów"}</div>
         </div>
@@ -809,7 +810,7 @@ function SeasonCard({ season, players, criteria, defaultOpen, seasonName, readOn
 
       {season.completed && !rolledOver && (
         <div style={{ marginTop:12, fontSize:10, color:"#94a3b8", background:"rgba(148,163,184,.08)", border:"1px solid #334155", borderRadius:8, padding:"8px 10px" }}>
-          ⏳ Sezon zakończony — wartości (÷3) i premie zostaną naliczone automatycznie przy najbliższym wejściu administratora.
+          ⏳ Sezon zakończony — wartości zostaną naliczone automatycznie przy najbliższym wejściu administratora. Gracze którzy nie rozegrali żadnego meczu tracą tylko -10% (urlop), pozostali ÷2.
         </div>
       )}
 
@@ -1080,11 +1081,13 @@ function CompareView({ players }) {
 }
 
 // ─── GŁÓWNA APLIKACJA ─────────────────────────────────────────────────────────
-function MainApp({ readOnly, onExit }) {
+function MainApp({ readOnly, onExit, identityId, onChangeIdentity }) {
   const [players, setPlayers] = useState(() => normalizePlayers(DEFAULT_PLAYERS));
   const [criteria, setCriteria] = useState(DEFAULT_CRITERIA);
   const [seasonNames, setSeasonNames] = useState({});
   const [duelMatches, setDuelMatches] = useState([]);
+  const [availability, setAvailability] = useState({});
+  const [nicknames, setNicknames] = useState({});
   const [view, setView] = useState("ranking");
   const [selP, setSelP] = useState(null);
   const [expanded, setExpanded] = useState(null);
@@ -1098,10 +1101,10 @@ function MainApp({ readOnly, onExit }) {
 
   function showToast(msg, col="#00ff85") { setToast({ msg, col }); setTimeout(() => setToast(null), 2800); }
 
-  async function saveToStorage(p, c, sn, dm) {
+  async function saveToStorage(p, c, sn, dm, av, nn) {
     try {
       const ts = Date.now();
-      const jsonStr = JSON.stringify({ players:p, criteria:c, seasonNames:(sn!==undefined?sn:seasonNames), duelMatches:(dm!==undefined?dm:duelMatches), ts });
+      const jsonStr = JSON.stringify({ players:p, criteria:c, seasonNames:(sn!==undefined?sn:seasonNames), duelMatches:(dm!==undefined?dm:duelMatches), availability:(av!==undefined?av:availability), nicknames:(nn!==undefined?nn:nicknames), ts });
       const sizeKB = (jsonStr.length/1024).toFixed(1);
       const res = await fetch("/api/data", { method:"POST", headers:{ "Content-Type":"application/json" }, body:jsonStr });
       if (!res.ok) { const t = await res.text().catch(() => ""); showToast(`⚠️ Błąd zapisu (${res.status}): ${t.slice(0,80)}`, "#ef4444"); return; }
@@ -1131,6 +1134,8 @@ function MainApp({ readOnly, onExit }) {
       if (data?.criteria) setCriteria(data.criteria);
       if (data?.seasonNames && typeof data.seasonNames === "object") setSeasonNames(data.seasonNames);
       if (Array.isArray(data?.duelMatches)) setDuelMatches(data.duelMatches);
+      if (data?.availability && typeof data.availability === "object") setAvailability(data.availability);
+      if (data?.nicknames && typeof data.nicknames === "object") setNicknames(data.nicknames);
       if (data?.ts) { lastTs.current = data.ts; setLastSync(new Date(data.ts).toLocaleTimeString("pl-PL")); }
     } catch (e) { /* offline ok */ }
   }
@@ -1146,7 +1151,7 @@ function MainApp({ readOnly, onExit }) {
     const np = nextPlayers !== undefined ? nextPlayers : players;
     const nc = nextCriteria !== undefined ? nextCriteria : criteria;
     setPlayers(np); setCriteria(nc);
-    saveToStorage(np, nc, seasonNames, duelMatches);
+    saveToStorage(np, nc, seasonNames, duelMatches, availability, nicknames);
   }
 
   function commitDuel(nextDuelMatches, nextPlayers) {
@@ -1154,7 +1159,23 @@ function MainApp({ readOnly, onExit }) {
     const np = nextPlayers !== undefined ? nextPlayers : players;
     setDuelMatches(ndm);
     if (nextPlayers) setPlayers(np);
-    saveToStorage(np, criteria, seasonNames, ndm);
+    saveToStorage(np, criteria, seasonNames, ndm, availability, nicknames);
+  }
+
+  function toggleAvailability(dateStr, playerId) {
+    const cur = availability[dateStr] || [];
+    const next = cur.includes(playerId) ? cur.filter(x => x !== playerId) : [...cur, playerId];
+    const nextAv = { ...availability, [dateStr]: next };
+    setAvailability(nextAv);
+    saveToStorage(players, criteria, seasonNames, duelMatches, nextAv, nicknames);
+  }
+
+  function saveNickname(playerId, nick) {
+    const trimmed = (nick || "").trim().slice(0, 20);
+    const nextNn = { ...nicknames };
+    if (trimmed) nextNn[playerId] = trimmed; else delete nextNn[playerId];
+    setNicknames(nextNn);
+    saveToStorage(players, criteria, seasonNames, duelMatches, availability, nextNn);
   }
 
   // zapis nazwy sezonu (admin) — niezależny od commit(), bo dotyczy innego pola stanu
@@ -1266,10 +1287,10 @@ function MainApp({ readOnly, onExit }) {
 
   // Główna nawigacja: tylko 5 najważniejszych sekcji, zawsze widoczne z podpisem.
   // Rzadziej używane funkcje (Porównaj, Kryteria, Opinie, Edytor, Info) żyją w „Więcej”.
-  const navItems = [["ranking","🏆","Ranking"],["history","📅","Mecze"],["stats","📊","Statystyki"],["seasons","👑","Sezony"],["more","☰","Więcej"]];
+  const navItems = [["ranking","🏆","Ranking"],["history","📅","Mecze"],["stats","📊","Statystyki"],["seasons","👑","Sezony"],["profile","👤","Mój Profil"],["more","☰","Więcej"]];
   const moreItems = readOnly
-    ? [["duels","⚡","Pojedynki","Tryb Team vs Team"],["compare","⚖️","Porównaj zawodników","Zestaw dwóch graczy obok siebie"],["criteria","📋","Kryteria ocen","Zasady punktacji w meczu"],["info","ℹ️","O aplikacji","Jak działa system ocen i wyceny"]]
-    : [["duels","⚡","Pojedynki","Tryb Team vs Team"],["compare","⚖️","Porównaj zawodników","Zestaw dwóch graczy obok siebie"],["opinions","💬","Opinie","Dodaj komentarz o zawodniku"],["criteria","📋","Kryteria ocen","Zasady punktacji w meczu"],["editor","⚙️","Edytor kryteriów","Zmień punktację i wagi"],["info","ℹ️","O aplikacji","Jak działa system ocen i wyceny"]];
+    ? [["calendar","📅","Kalendarz dostępności","Zaznacz kiedy będziesz na boisku"],["duels","⚡","Pojedynki","Tryb Team vs Team"],["compare","⚖️","Porównaj zawodników","Zestaw dwóch graczy obok siebie"],["criteria","📋","Kryteria ocen","Zasady punktacji w meczu"],["info","ℹ️","O aplikacji","Jak działa system ocen i wyceny"]]
+    : [["calendar","📅","Kalendarz dostępności","Zaznacz kiedy będziesz na boisku"],["duels","⚡","Pojedynki","Tryb Team vs Team"],["compare","⚖️","Porównaj zawodników","Zestaw dwóch graczy obok siebie"],["opinions","💬","Opinie","Dodaj komentarz o zawodniku"],["criteria","📋","Kryteria ocen","Zasady punktacji w meczu"],["editor","⚙️","Edytor kryteriów","Zmień punktację i wagi"],["info","ℹ️","O aplikacji","Jak działa system ocen i wyceny"]];
 
   return (
     <div style={{ minHeight:"100vh", background:BG, color:"#e2e8f0", fontFamily:"'Inter',system-ui,sans-serif", paddingBottom:80 }}>
@@ -1289,6 +1310,14 @@ function MainApp({ readOnly, onExit }) {
             <span style={{ fontSize:10, fontWeight:700, color:readOnly?"#7ef5e5":"#7dffb8", border:`1px solid ${readOnly?"#0e7490":"#15803d"}`, borderRadius:6, padding:"4px 9px" }}>
               {readOnly?"👁️ Widz":"🛠️ Admin"}
             </span>
+            {identityId && identityId !== "anonymous" && (() => {
+              const me = players.find(p => p.id === identityId);
+              return me ? (
+                <button onClick={onChangeIdentity} title="Zmień profil" style={{ background:"rgba(0,255,133,.1)", border:"1px solid #15803d", borderRadius:6, color:"#7dffb8", fontSize:11, fontWeight:700, padding:"4px 9px", cursor:"pointer" }}>
+                  👤 {me.name}
+                </button>
+              ) : null;
+            })()}
             {!readOnly && (
               <button onClick={() => saveToStorage(players, criteria)} title="Zapisz" style={{ background:"linear-gradient(135deg,#16a34a,#00ff85)", border:"none", borderRadius:8, color:"#06150c", padding:"8px 11px", fontSize:14, fontWeight:700, cursor:"pointer", display:"flex", alignItems:"center" }}>
                 💾
@@ -1304,7 +1333,7 @@ function MainApp({ readOnly, onExit }) {
       <div style={{ maxWidth:720, margin:"0 auto", padding:"0 16px" }}>
         {toast && <div style={{ background:toast.col, borderRadius:8, padding:"10px 16px", marginTop:14, fontSize:13, fontWeight:600 }}>{toast.msg}</div>}
 
-        {["compare","opinions","criteria","editor","info","duels"].includes(view) && (
+        {["compare","opinions","criteria","editor","info","duels","calendar"].includes(view) && (
           <button onClick={() => setView("more")} style={{ display:"flex", alignItems:"center", gap:5, background:"transparent", border:"none", color:"#4a6b56", fontSize:12, fontWeight:700, cursor:"pointer", padding:"14px 0 0", marginBottom:-6 }}>
             ‹ Więcej
           </button>
@@ -1441,6 +1470,19 @@ function MainApp({ readOnly, onExit }) {
         {/* SEZONY */}
         {view==="seasons" && <SeasonsView players={players} criteria={criteria} seasonNames={seasonNames} readOnly={readOnly} onRename={setSeasonName} />}
 
+        {/* MÓJ PROFIL */}
+        {view==="profile" && (
+          <MyProfileView
+            players={players}
+            identityId={identityId}
+            nicknames={nicknames}
+            onSaveNickname={saveNickname}
+            onChangeIdentity={onChangeIdentity}
+            criteria={criteria}
+            seasonNames={seasonNames}
+          />
+        )}
+
         {/* WIĘCEJ — siatka kafelków z resztą funkcji */}
         {view==="more" && (
           <div style={{ marginTop:20 }}>
@@ -1456,6 +1498,9 @@ function MainApp({ readOnly, onExit }) {
             </div>
           </div>
         )}
+
+        {/* KALENDARZ DOSTĘPNOŚCI */}
+        {view==="calendar" && <AvailabilityCalendar players={players} availability={availability} identityId={identityId} onToggle={toggleAvailability} onChangeIdentity={onChangeIdentity} />}
 
         {/* TRYB POJEDYNKI */}
         {view==="duels" && <DuelsView players={players} duelMatches={duelMatches} readOnly={readOnly} onSave={commitDuel} />}
@@ -2278,6 +2323,345 @@ function DuelWizard({ players, duelMatches, onSave, onCancel }) {
   return null;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  KALENDARZ DOSTĘPNOŚCI
+// ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+//  MÓJ PROFIL — radar chart + statystyki + edycja nicku
+// ═══════════════════════════════════════════════════════════════════════════
+
+function RadarChart({ axes, size = 220 }) {
+  const cx = size / 2, cy = size / 2;
+  const r = size * 0.38;
+  const n = axes.length;
+
+  // Kąt każdej osi — zaczynamy od góry (ATT), idąc zgodnie z ruchem wskazówek
+  const angle = (i) => (Math.PI * 2 * i) / n - Math.PI / 2;
+  const pt = (i, pct) => {
+    const a = angle(i), d = r * pct;
+    return [cx + d * Math.cos(a), cy + d * Math.sin(a)];
+  };
+
+  // Siatka — 4 pierścienie (25%, 50%, 75%, 100%)
+  const gridLevels = [0.25, 0.5, 0.75, 1.0];
+  const gridPoly = (pct) =>
+    axes.map((_, i) => pt(i, pct).join(",")).join(" ");
+
+  // Wartości zawodnika (score 0-100 → 0.0-1.0)
+  const dataPoly = axes.map((a, i) => pt(i, a.score / 100).join(",")).join(" ");
+  // Drugi ring — 80% wartości (dla efektu wizualnego jak na screenie)
+  const data2Poly = axes.map((a, i) => pt(i, (a.score / 100) * 0.82).join(",")).join(" ");
+
+  return (
+    <svg width={size} height={size + 30} viewBox={`0 0 ${size} ${size + 30}`} style={{ overflow:"visible" }}>
+      {/* Tło */}
+      <polygon points={gridPoly(1.0)} fill="#0a0f0c" stroke="#1c2820" strokeWidth={1} />
+
+      {/* Siatka */}
+      {gridLevels.map((lvl, gi) => (
+        <polygon key={gi} points={gridPoly(lvl)} fill="none" stroke="#1c2820" strokeWidth={gi === 3 ? 1.5 : 0.8} />
+      ))}
+
+      {/* Linie osi */}
+      {axes.map((_, i) => {
+        const [x, y] = pt(i, 1.0);
+        return <line key={i} x1={cx} y1={cy} x2={x} y2={y} stroke="#1c2820" strokeWidth={0.8} />;
+      })}
+
+      {/* Wypełnienie danych — zewnętrzny ring */}
+      <polygon points={dataPoly} fill="rgba(0,255,133,0.18)" stroke="#00ff85" strokeWidth={2} strokeLinejoin="round" />
+      {/* Wewnętrzny ring (efekt głębi jak w EA FC) */}
+      <polygon points={data2Poly} fill="rgba(0,255,133,0.10)" stroke="rgba(0,255,133,0.5)" strokeWidth={1} strokeLinejoin="round" />
+
+      {/* Etykiety osi z wartościami */}
+      {axes.map((axis, i) => {
+        const a = angle(i);
+        const labelR = r + 28;
+        const lx = cx + labelR * Math.cos(a);
+        const ly = cy + labelR * Math.sin(a);
+        const score = axis.score;
+        const bgColor = score >= 75 ? "#15803d" : score >= 50 ? "#0e7490" : score >= 30 ? "#b45309" : "#991b1b";
+
+        return (
+          <g key={i}>
+            {/* Kolorowy badge z wartością */}
+            <rect x={lx - 18} y={ly - 10} width={36} height={19} rx={4} fill={bgColor} />
+            <text x={lx} y={ly - 1} textAnchor="middle" fill="#fff" fontSize={9} fontWeight="800">{axis.id}</text>
+            <text x={lx} y={ly + 8} textAnchor="middle" fill="#fff" fontSize={8} fontWeight="700">{score}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
+function MyProfileView({ players, identityId, nicknames, onSaveNickname, onChangeIdentity, criteria, seasonNames }) {
+  const [editingNick, setEditingNick] = useState(false);
+  const [nickDraft, setNickDraft] = useState("");
+
+  const p = identityId && identityId !== "anonymous"
+    ? players.find(x => x.id === identityId)
+    : null;
+
+  const displayName = p ? (nicknames[p.id] || p.name) : null;
+  const val = p ? calcValue(p) : 0;
+  const avg = p ? getAvgRating(p.matches) : 0;
+  const radar = p ? computeRadar(p) : null;
+  const totals = p ? computePlayerTotals(p) : null;
+
+  if (!p) {
+    return (
+      <div style={{ marginTop:20, textAlign:"center" }}>
+        <div style={{ fontSize:40, marginBottom:12 }}>👤</div>
+        <div style={{ fontSize:16, fontWeight:800, color:"#e7f5ec", marginBottom:8 }}>Nie masz wybranego profilu</div>
+        <div style={{ fontSize:12, color:"#4a6b56", marginBottom:20 }}>Wybierz kim jesteś, żeby zobaczyć swoje statystyki.</div>
+        <button onClick={onChangeIdentity}
+          style={{ background:"linear-gradient(135deg,#16a34a,#00ff85)", border:"none", borderRadius:10, color:"#06150c", fontSize:14, fontWeight:800, padding:"12px 24px", cursor:"pointer" }}>
+          Wybierz profil
+        </button>
+      </div>
+    );
+  }
+
+  const startNickEdit = () => { setNickDraft(nicknames[p.id] || ""); setEditingNick(true); };
+  const saveNick = () => { onSaveNickname(p.id, nickDraft); setEditingNick(false); };
+
+  // Statystyki per kategoria do listy pod radarem
+  const statRows = [
+    { label:"⚽ Gole",        val: totals.goals },
+    { label:"🎯 Asysty",      val: totals.assists },
+    { label:"🚀 Bengery",     val: totals.screamers },
+    { label:"🍑 Siatki",      val: totals.nutmegs },
+    { label:"🔥 Clutch",      val: totals.clutch },
+    { label:"🧤 Saves",       val: totals.saves },
+    { label:"⚡ Wślizgi",     val: totals.tackles },
+    { label:"🤦 Pudła",       val: totals.miss,    neg: true },
+    { label:"😬 Samobóje",    val: totals.ownGoals, neg: true },
+  ].filter(r => r.val > 0);
+
+  // Najlepszy mecz (najwyższa ocena)
+  const sortedMatches = [...(p.matches || [])].sort((a, b) => (b.rating || 0) - (a.rating || 0));
+  const bestMatch = sortedMatches[0];
+
+  return (
+    <div style={{ marginTop:16 }}>
+
+      {/* ── Nagłówek profilu ─────────────────────────────────────────────── */}
+      <div style={{ ...CARD, marginBottom:12 }}>
+        <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start" }}>
+          <div style={{ flex:1 }}>
+            {editingNick ? (
+              <div style={{ display:"flex", gap:6, alignItems:"center", marginBottom:8 }}>
+                <input
+                  autoFocus
+                  value={nickDraft}
+                  onChange={e => setNickDraft(e.target.value)}
+                  maxLength={20}
+                  placeholder={p.name}
+                  onKeyDown={e => { if (e.key==="Enter") saveNick(); if (e.key==="Escape") setEditingNick(false); }}
+                  style={{ ...INP, fontSize:18, fontWeight:900, padding:"6px 10px", width:160 }}
+                />
+                <button onClick={saveNick} style={{ background:"#15803d", border:"none", borderRadius:6, color:"#e7f5ec", padding:"6px 12px", fontWeight:700, cursor:"pointer", fontSize:13 }}>✓</button>
+                <button onClick={() => setEditingNick(false)} style={{ background:"transparent", border:"1px solid #2a3d2f", borderRadius:6, color:"#4a6b56", padding:"6px 10px", cursor:"pointer", fontSize:13 }}>✕</button>
+              </div>
+            ) : (
+              <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+                <span style={{ fontSize:22, fontWeight:900, color:"#e7f5ec" }}>{displayName}</span>
+                {nicknames[p.id] && <span style={{ fontSize:10, color:"#4a6b56" }}>({p.name})</span>}
+                <button onClick={startNickEdit} title="Zmień nick"
+                  style={{ background:"none", border:"1px solid #2a3d2f", borderRadius:5, color:"#4a6b56", padding:"2px 8px", fontSize:11, cursor:"pointer" }}>
+                  ✏️ Nick
+                </button>
+              </div>
+            )}
+            <div style={{ fontSize:12, color:"#4a6b56" }}>{p.position} · {p.matches.length} meczów</div>
+          </div>
+          <div style={{ textAlign:"right" }}>
+            <div style={{ fontSize:20, fontWeight:900, color:"#00ff85" }}>{fv(val)}</div>
+            <div style={{ fontSize:11, color:"#4a6b56" }}>Wartość rynkowa</div>
+            <div style={{ fontSize:16, fontWeight:800, color:rc(avg), marginTop:4 }}>{avg > 0 ? avg.toFixed(2) : "—"}</div>
+            <div style={{ fontSize:11, color:"#4a6b56" }}>Śr. ocena</div>
+          </div>
+        </div>
+        <button onClick={onChangeIdentity}
+          style={{ marginTop:10, background:"transparent", border:"1px solid #1c2820", borderRadius:6, color:"#4a6b56", padding:"5px 12px", fontSize:11, cursor:"pointer" }}>
+          Zmień profil
+        </button>
+      </div>
+
+      {/* ── Radar Chart ──────────────────────────────────────────────────── */}
+      {p.matches.length === 0 ? (
+        <div style={{ ...CARD, textAlign:"center", color:"#4a6b56", padding:32 }}>
+          Zagraj co najmniej jeden mecz żeby zobaczyć radar statystyk.
+        </div>
+      ) : (
+        <div style={CARD}>
+          <div style={{ fontSize:13, fontWeight:800, color:"#e7f5ec", marginBottom:4 }}>Attribute Overview</div>
+          <div style={{ fontSize:10, color:"#4a6b56", marginBottom:16 }}>Bazuje na {p.matches.length} meczach</div>
+
+          {/* SVG radar */}
+          <div style={{ display:"flex", justifyContent:"center", marginBottom:16 }}>
+            <RadarChart axes={radar} size={240} />
+          </div>
+
+          {/* Legenda osi */}
+          <div style={{ display:"flex", flexWrap:"wrap", gap:8, justifyContent:"center", marginBottom:16 }}>
+            {radar.map(ax => (
+              <div key={ax.id} style={{ display:"flex", alignItems:"center", gap:5, fontSize:10 }}>
+                <span style={{ width:8, height:8, borderRadius:2, background:ax.score>=75?"#15803d":ax.score>=50?"#0e7490":ax.score>=30?"#b45309":"#991b1b", display:"inline-block" }} />
+                <span style={{ color:"#a8c9b0" }}>{ax.label}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Sumy absolutne */}
+          {statRows.length > 0 && (
+            <>
+              <div style={{ height:1, background:"#1c2820", marginBottom:14 }} />
+              <div style={{ fontSize:11, fontWeight:700, color:"#4a6b56", marginBottom:10, letterSpacing:.5 }}>STATYSTYKI ŁĄCZNIE</div>
+              <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6 }}>
+                {statRows.map(r => (
+                  <div key={r.label} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", background:"#070a08", borderRadius:6, padding:"7px 10px", border:`1px solid ${r.neg?"rgba(239,68,68,.2)":"#1c2820"}` }}>
+                    <span style={{ fontSize:12, color: r.neg ? "#fca5a5" : "#a8c9b0" }}>{r.label}</span>
+                    <span style={{ fontSize:14, fontWeight:900, color: r.neg ? "#ef4444" : "#00ff85" }}>{r.val}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* ── Najlepszy mecz ───────────────────────────────────────────────── */}
+      {bestMatch && (
+        <div style={CARD}>
+          <div style={{ fontSize:11, fontWeight:700, color:"#4a6b56", marginBottom:10, letterSpacing:.5 }}>🏆 NAJLEPSZY MECZ</div>
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+            <div>
+              <div style={{ fontSize:13, fontWeight:700, color:"#e7f5ec" }}>vs {bestMatch.opponent || "—"}</div>
+              <div style={{ fontSize:11, color:"#4a6b56" }}>{fmtPL(bestMatch.date)} · {bestMatch.score || "?:?"}</div>
+            </div>
+            <div style={{ fontSize:28, fontWeight:900, color:rcSofa(bestMatch.rating || 0) }}>
+              {(bestMatch.rating || 0).toFixed(1)}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Postęp wartości (skrócony) ───────────────────────────────────── */}
+      {p.matches.length >= 2 && (
+        <div style={CARD}>
+          <div style={{ fontSize:11, fontWeight:700, color:"#4a6b56", marginBottom:10, letterSpacing:.5 }}>📈 WYKRES WARTOŚCI</div>
+          <PlayerValueChart player={p} seasonNames={seasonNames} />
+        </div>
+      )}
+
+    </div>
+  );
+}
+
+function AvailabilityCalendar({ players, availability, identityId, onToggle, onChangeIdentity }) {
+  const today = new Date();
+  const toDateStr = (d) => d.toISOString().slice(0, 10);
+  const addDays = (d, n) => { const r = new Date(d); r.setDate(r.getDate() + n); return r; };
+  const days = Array.from({ length: 21 }, (_, i) => addDays(today, i));
+  const realPlayers = players.filter(p => !p.random);
+  const me = identityId && identityId !== "anonymous" ? realPlayers.find(p => p.id === identityId) : null;
+  const dayNames = ["Nd", "Pn", "Wt", "Śr", "Cz", "Pt", "Sb"];
+  const monthNames = ["sty","lut","mar","kwi","maj","cze","lip","sie","wrz","paź","lis","gru"];
+
+  return (
+    <div style={{ marginTop:16 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14 }}>
+        <div>
+          <div style={{ fontSize:18, fontWeight:900, color:"#e7f5ec" }}>📅 Kiedy gram?</div>
+          <div style={{ fontSize:11, color:"#4a6b56" }}>Zaznacz dni, w których będziesz na boisku</div>
+        </div>
+        {!me && (
+          <button onClick={onChangeIdentity}
+            style={{ background:"linear-gradient(135deg,#16a34a,#00ff85)", border:"none", borderRadius:8, color:"#06150c", fontSize:12, fontWeight:800, padding:"9px 14px", cursor:"pointer" }}>
+            👤 Wybierz profil
+          </button>
+        )}
+      </div>
+
+      {!me && (
+        <div style={{ ...CARD, textAlign:"center", padding:24 }}>
+          <div style={{ fontSize:28, marginBottom:8 }}>👻</div>
+          <div style={{ fontSize:14, fontWeight:700, color:"#e7f5ec", marginBottom:6 }}>Nie wybrałeś profilu</div>
+          <div style={{ fontSize:12, color:"#4a6b56", marginBottom:16 }}>Wybierz kim jesteś, żeby zaznaczać swoją dostępność.</div>
+          <button onClick={onChangeIdentity}
+            style={{ background:"linear-gradient(135deg,#16a34a,#00ff85)", border:"none", borderRadius:10, color:"#06150c", fontSize:14, fontWeight:800, padding:"12px 20px", cursor:"pointer" }}>
+            Wybierz profil
+          </button>
+        </div>
+      )}
+
+      {/* Legenda */}
+      {me && (
+        <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:12, fontSize:11, color:"#4a6b56" }}>
+          <span>Zalogowany jako <b style={{ color:"#7dffb8" }}>{me.name}</b></span>
+          <button onClick={onChangeIdentity} style={{ background:"none", border:"none", color:"#4a6b56", fontSize:11, cursor:"pointer", textDecoration:"underline", padding:0 }}>zmień</button>
+        </div>
+      )}
+
+      {/* Lista dni */}
+      <div style={{ display:"flex", flexDirection:"column", gap:6 }}>
+        {days.map(day => {
+          const ds = toDateStr(day);
+          const present = availability[ds] || [];
+          const iAmIn = me && present.includes(me.id);
+          const isToday = ds === toDateStr(today);
+          const isWeekend = day.getDay() === 0 || day.getDay() === 6;
+          const dayLabel = `${dayNames[day.getDay()]} ${day.getDate()} ${monthNames[day.getMonth()]}`;
+          const avatars = realPlayers.filter(p => present.includes(p.id));
+
+          return (
+            <div key={ds} style={{ ...CARD, margin:0, padding:"10px 14px", borderColor: iAmIn ? "#15803d" : isToday ? "#2a3d2f" : "#1c2820", background: iAmIn ? "rgba(21,128,61,.1)" : isWeekend ? "rgba(0,255,133,.03)" : "#0f1612" }}>
+              <div style={{ display:"flex", alignItems:"center", gap:10 }}>
+                {/* Data */}
+                <div style={{ width:80, flexShrink:0 }}>
+                  <div style={{ fontSize:13, fontWeight:800, color: isToday ? "#00ff85" : isWeekend ? "#7dffb8" : "#e7f5ec" }}>{dayLabel}</div>
+                  {isToday && <div style={{ fontSize:9, color:"#00ff85", fontWeight:700 }}>DZIŚ</div>}
+                </div>
+
+                {/* Kto gra */}
+                <div style={{ flex:1, display:"flex", flexWrap:"wrap", gap:4 }}>
+                  {avatars.length === 0
+                    ? <span style={{ fontSize:11, color:"#2a3d2f" }}>nikt nie zaznaczył</span>
+                    : avatars.map(p => (
+                        <span key={p.id} style={{ fontSize:11, fontWeight:700, background: p.id===me?.id ? "rgba(0,255,133,.2)" : "rgba(255,255,255,.05)", border:`1px solid ${p.id===me?.id?"#15803d":"#2a3d2f"}`, borderRadius:4, padding:"2px 7px", color: p.id===me?.id ? "#7dffb8" : "#a8c9b0" }}>
+                          {p.name}
+                        </span>
+                      ))
+                  }
+                </div>
+
+                {/* Liczba + przycisk */}
+                <div style={{ display:"flex", alignItems:"center", gap:8, flexShrink:0 }}>
+                  {avatars.length > 0 && (
+                    <span style={{ fontSize:12, fontWeight:800, color: avatars.length >= 8 ? "#00ff85" : avatars.length >= 5 ? "#7dffb8" : "#4a6b56" }}>
+                      {avatars.length} os.
+                    </span>
+                  )}
+                  {me && (
+                    <button onClick={() => onToggle(ds, me.id)}
+                      style={{ padding:"7px 12px", borderRadius:8, border:"none", fontSize:12, fontWeight:800, cursor:"pointer",
+                        background: iAmIn ? "#15803d" : "#1c2820",
+                        color: iAmIn ? "#e7f5ec" : "#4a6b56" }}>
+                      {iAmIn ? "✓ Jestem" : "+ Jestem"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ModeSelect({ onChoose }) {
   return (
     <div style={{ minHeight:"100vh", background:BG, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Inter',system-ui,sans-serif", padding:20 }}>
@@ -2325,15 +2709,51 @@ function AdminGate({ onSuccess, onBack }) {
   );
 }
 
+const IDENTITY_KEY = "pim-identity";
+
 export default function App() {
   const [mode, setMode] = useState(() => { try { return localStorage.getItem(MODE_KEY) || null; } catch (e) { return null; } });
   const [authed, setAuthed] = useState(() => { try { return localStorage.getItem(ADMIN_KEY)==="yes"; } catch (e) { return false; } });
+  const [identity, setIdentity] = useState(() => { try { return localStorage.getItem(IDENTITY_KEY) || null; } catch (e) { return null; } });
+  const [pickingIdentity, setPickingIdentity] = useState(false);
 
   const chooseMode = (m) => { try { localStorage.setItem(MODE_KEY, m); } catch (e) {} setMode(m); };
   const exit = () => { try { localStorage.removeItem(MODE_KEY); } catch (e) {} setMode(null); };
+  const chooseIdentity = (id) => { try { localStorage.setItem(IDENTITY_KEY, id); } catch (e) {} setIdentity(id); setPickingIdentity(false); };
 
-  if (mode==="viewer") return <MainApp readOnly onExit={exit} />;
-  if (mode==="admin" && authed) return <MainApp readOnly={false} onExit={exit} />;
+  // Ekran wyboru tożsamości (kim jesteś?)
+  if (pickingIdentity || (mode && !identity)) {
+    return (
+      <div style={{ minHeight:"100vh", background:BG, display:"flex", alignItems:"center", justifyContent:"center", fontFamily:"'Inter',system-ui,sans-serif", padding:20 }}>
+        <div style={{ maxWidth:360, width:"100%" }}>
+          <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:20 }}>
+            <span style={{ fontSize:11, fontWeight:900, background:"#00ff85", color:"#06150c", borderRadius:5, padding:"3px 6px" }}>FC</span>
+            <span style={{ fontSize:16, fontWeight:900, color:"#e7f5ec" }}>Kim jesteś?</span>
+          </div>
+          <div style={{ fontSize:12, color:"#4a6b56", marginBottom:16 }}>Wybierz swój profil, żeby zaznaczyć dostępność w kalendarzu. Możesz to zmienić później.</div>
+          <div style={{ display:"flex", flexDirection:"column", gap:8 }}>
+            {PLAYERS.map(p => (
+              <button key={p.id} onClick={() => chooseIdentity(p.id)}
+                style={{ padding:"14px 16px", background: identity===p.id ? "rgba(0,255,133,.15)" : "#0f1612", border:`1px solid ${identity===p.id?"#00ff85":"#2a3d2f"}`, borderRadius:10, color:"#e7f5ec", fontSize:14, fontWeight:700, cursor:"pointer", textAlign:"left", display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+                <span>{p.name}</span>
+                <span style={{ fontSize:11, color:"#4a6b56" }}>{p.position} · {fv(p.value)}</span>
+              </button>
+            ))}
+            <button onClick={() => chooseIdentity("anonymous")}
+              style={{ padding:"12px 16px", background:"transparent", border:"1px solid #1c2820", borderRadius:10, color:"#4a6b56", fontSize:13, cursor:"pointer", textAlign:"center" }}>
+              👻 Wolę być anonimowy
+            </button>
+          </div>
+          {(mode && identity) && (
+            <button onClick={() => setPickingIdentity(false)} style={{ marginTop:12, width:"100%", padding:"10px", background:"transparent", border:"1px solid #2a3d2f", borderRadius:8, color:"#4a6b56", fontSize:12, cursor:"pointer" }}>← Anuluj</button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  if (mode==="viewer") return <MainApp readOnly onExit={exit} identityId={identity} onChangeIdentity={() => setPickingIdentity(true)} />;
+  if (mode==="admin" && authed) return <MainApp readOnly={false} onExit={exit} identityId={identity} onChangeIdentity={() => setPickingIdentity(true)} />;
   if (mode==="admin" && !authed) return <AdminGate onSuccess={() => setAuthed(true)} onBack={exit} />;
   return <ModeSelect onChoose={chooseMode} />;
 }
