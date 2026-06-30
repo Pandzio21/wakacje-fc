@@ -505,13 +505,14 @@ export function applySeasonRolloverIfNeeded(players) {
     cur = cur.map(p => {
       if (p.random) return p;
       const events = [...(p.seasonEvents || [])];
-      const wasOnPitch = playedInSeason.has(p.id);
+      const onVacation = (p.vacationSeasons || []).includes(season.index);
+      const wasOnPitch = !onVacation && playedInSeason.has(p.id);
 
       if (wasOnPitch) {
         // Grał w sezonie → normalne ÷2
         events.push({ seasonIdx: season.index, date: divideDate, type: "divide3" });
       } else {
-        // Sezon na urlopie → tylko -10% wartości (łagodniejsza kara)
+        // Sezon na urlopie (ręczny lub po prostu brak meczów) → tylko -10% wartości
         events.push({ seasonIdx: season.index, date: divideDate, type: "vacation_penalty" });
       }
 
@@ -531,6 +532,10 @@ export function getLastCompletedSeasonAwards(players) {
   return { season: last, awards: computeSeasonAwards(last, players) };
 }
 
+export function isOnVacation(player, seasonIdx) {
+  return (player.vacationSeasons || []).includes(seasonIdx);
+}
+
 // ─── NORMALIZACJA STANU (zawsze 10 realnych + 4 random) ───────────────────────
 export function normalizePlayers(loaded) {
   const byId = {};
@@ -544,6 +549,7 @@ export function normalizePlayers(loaded) {
       opinions: (ex && Array.isArray(ex.opinions)) ? ex.opinions : [],
       seasonEvents: (ex && Array.isArray(ex.seasonEvents)) ? ex.seasonEvents : [],
       duels: (ex && Array.isArray(ex.duels)) ? ex.duels : [],
+      vacationSeasons: (ex && Array.isArray(ex.vacationSeasons)) ? ex.vacationSeasons : [],
     };
   });
   return [...build(PLAYERS, false), ...build(RANDOM_PLAYERS, true)];

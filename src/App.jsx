@@ -15,7 +15,7 @@ import {
   matchByMatchWalk, CATCHUP_FLOOR, CATCHUP_CEIL, MAX_GAIN_PER_MATCH,
   DUEL_SET_TYPES, shuffleSets, drawPairs, calcSetScore, calcDuelMatchResult,
   computeDuelPlayerStats, duelEfficiency,
-  RADAR_AXES, computeRadar, computePlayerTotals,
+  RADAR_AXES, computeRadar, computePlayerTotals, isOnVacation,
 } from "./logic.js";
 
 // ─── WSPÓLNE STYLE — „Piękni i Młodzi FC" (motyw EA FC 25: zielono-czarny) ─────
@@ -97,10 +97,19 @@ function MatchWizard({ wiz, setWiz, players, criteria, onSubmit }) {
               <input value={name} onChange={e => setName(e.target.value)} placeholder={ph} style={{ ...inp, marginBottom:10, borderColor:ac+"66" }} />
               <label style={lbl}>Zawodnicy</label>
               <div style={{ display:"flex", flexDirection:"column", gap:3 }}>
-                {PLAYERS.map(p => <PlayerPick key={p.id} p={p} ids={ids} other={other} setIds={setIds} ac={ac} ab={ab} />)}
+                {PLAYERS.filter(p => {
+                  const meta = players.find(x => x.id === p.id);
+                  const sIdx = seasonIndexOf(date);
+                  return !meta || !isOnVacation(meta, sIdx);
+                }).map(p => <PlayerPick key={p.id} p={p} ids={ids} other={other} setIds={setIds} ac={ac} ab={ab} />)}
                 <div style={{ fontSize:9, color:"#475569", textAlign:"center", margin:"4px 0 1px", letterSpacing:.5 }}>— SPOZA KLASY —</div>
                 {RANDOM_PLAYERS.map(p => <PlayerPick key={p.id} p={p} ids={ids} other={other} setIds={setIds} ac={ac} ab={ab} />)}
               </div>
+              {(() => {
+                const sIdx = seasonIndexOf(date);
+                const onVac = PLAYERS.filter(p => { const meta = players.find(x=>x.id===p.id); return meta && isOnVacation(meta, sIdx); });
+                return onVac.length>0 ? <div style={{ fontSize:9, color:"#b45309", marginTop:6 }}>🏖️ Na urlopie w tym sezonie: {onVac.map(p=>p.name).join(", ")}</div> : null;
+              })()}
               <div style={{ fontSize:11, color:ac, marginTop:5, opacity: ids.length?1:0.3 }}>{ids.length} zawodników</div>
             </div>
           ))}
@@ -1097,6 +1106,7 @@ function MainApp({ readOnly, onExit, identityId, onChangeIdentity }) {
   const [editCrit, setEditCrit] = useState(null);
   const [newCrit, setNewCrit] = useState({ label:"", desc:"", points:"0.20", cat:"pos" });
   const [lastSync, setLastSync] = useState(null);
+  const [statsSeasonFilter, setStatsSeasonFilter] = useState(() => seasonIndexOf(todayStr())); // domyślnie bieżący sezon
   const lastTs = useRef(null);
 
   function showToast(msg, col="#00ff85") { setToast({ msg, col }); setTimeout(() => setToast(null), 2800); }
@@ -1176,6 +1186,16 @@ function MainApp({ readOnly, onExit, identityId, onChangeIdentity }) {
     if (trimmed) nextNn[playerId] = trimmed; else delete nextNn[playerId];
     setNicknames(nextNn);
     saveToStorage(players, criteria, seasonNames, duelMatches, availability, nextNn);
+  }
+
+  function toggleVacation(playerId, seasonIdx) {
+    const next = players.map(p => {
+      if (p.id !== playerId) return p;
+      const cur = p.vacationSeasons || [];
+      const updated = cur.includes(seasonIdx) ? cur.filter(x => x !== seasonIdx) : [...cur, seasonIdx];
+      return { ...p, vacationSeasons: updated };
+    });
+    commit(next);
   }
 
   // zapis nazwy sezonu (admin) — niezależny od commit(), bo dotyczy innego pola stanu
@@ -1350,8 +1370,9 @@ function MainApp({ readOnly, onExit, identityId, onChangeIdentity }) {
               const avg = getAvgRating(p.matches), val = calcValue(p), trend = getTrend(p.matches), chg = val-p.value;
               const badges = badgesFor(p.id, lca);
               const isOpen = expanded === p.id;
+              const onVac = isOnVacation(p, seasonIndexOf(todayStr()));
               return (
-                <div key={p.id} style={{ marginBottom:8 }}>
+                <div key={p.id} style={{ marginBottom:8, opacity: onVac ? 0.45 : 1, transition:"opacity .2s" }}>
                   <div onClick={() => setExpanded(isOpen ? null : p.id)}
                     style={{ background:"#0f1612", border:`1px solid ${isOpen?"#00ff85":"#1c2820"}`, borderRadius: isOpen?"10px 10px 0 0":10, padding:"13px 16px", cursor:"pointer", display:"flex", alignItems:"center", gap:14 }}>
                     <div style={{ width:26, textAlign:"center", fontWeight:900, fontSize:15, color:i<3?["#fbbf24","#a8c9b0","#b45309"][i]:"#2a3d2f" }}>#{i+1}</div>
@@ -1359,6 +1380,7 @@ function MainApp({ readOnly, onExit, identityId, onChangeIdentity }) {
                       <div style={{ fontWeight:700, fontSize:14, color:"#e2e8f0", display:"flex", alignItems:"center", gap:6, flexWrap:"wrap" }}>
                         <span>{p.name} <span style={{ fontSize:11, color:"#334155", fontWeight:400 }}>· {p.position}</span></span>
                         {badges.map(([emoji, title], bi) => <span key={bi} title={title} style={{ fontSize:13 }}>{emoji}</span>)}
+                        {onVac && <span title="Na urlopie w tym sezonie" style={{ fontSize:9, background:"rgba(180,83,9,.2)", border:"1px solid #b45309", color:"#fbbf24", borderRadius:3, padding:"1px 5px" }}>🏖️ Urlop</span>}
                         {val>=TOP_TIER_FLOOR && <span title={`Blisko limitu ${fv(MAX_VALUE)} — wymagana ocena ≥${TOP_TIER_MIN_RATING.toFixed(1)}, inaczej spadek x4`} style={{ fontSize:9, background:"rgba(239,68,68,.18)", border:"1px solid #ef4444", color:"#fca5a5", borderRadius:3, padding:"1px 5px" }}>⚠️ TOP · ≥{TOP_TIER_MIN_RATING.toFixed(1)}</span>}
                       </div>
                       <div style={{ fontSize:11, color:"#334155", marginTop:1 }}>{p.matches.length} meczów · kliknij po wykres</div>
@@ -1407,20 +1429,50 @@ function MainApp({ readOnly, onExit, identityId, onChangeIdentity }) {
         {/* STATYSTYKI (bez zawodników spoza klasy) */}
         {view==="stats" && (() => {
           const real = players.filter(p => !p.random);
-          const sumC = (player, ...ids) => (player.matches||[]).reduce((t,m) => t + ids.reduce((s,id) => s + parseInt((m.criteria||{})[id]||0), 0), 0);
+          const seasons = buildSeasons(players);
+          const curIdx = seasonIndexOf(todayStr());
+          const filterIdx = statsSeasonFilter; // null = łącznie, liczba = konkretny sezon
+
+          // sumC liczy kryteria TYLKO z meczów należących do wybranego sezonu (lub wszystkich, gdy filterIdx===null)
+          const sumC = (player, ...ids) => (player.matches||[])
+            .filter(m => filterIdx===null || seasonIndexOf(m.date)===filterIdx)
+            .reduce((t,m) => t + ids.reduce((s,id) => s + parseInt((m.criteria||{})[id]||0), 0), 0);
+
           const boards = [
             { title:"Strzelcy", emoji:"⚽", col:"#00ff85", unit:"goli", data:real.map(p => ({ name:p.name, pos:p.position, n:sumC(p,"goal","header","freekick","screamer") })).sort((a,b) => b.n-a.n).filter(x => x.n>0) },
             { title:"Asystenci", emoji:"🎯", col:"#14b8a6", unit:"asyst", data:real.map(p => ({ name:p.name, pos:p.position, n:sumC(p,"assist") })).sort((a,b) => b.n-a.n).filter(x => x.n>0) },
             { title:"Bengery", emoji:"🚀", col:"#f97316", unit:"szt.", data:real.map(p => ({ name:p.name, pos:p.position, n:sumC(p,"screamer") })).sort((a,b) => b.n-a.n).filter(x => x.n>0) },
             { title:"Siatkówki", emoji:"🍑", col:"#a855f7", unit:"szt.", data:real.map(p => ({ name:p.name, pos:p.position, n:sumC(p,"nutmeg") })).sort((a,b) => b.n-a.n).filter(x => x.n>0) },
           ];
+
+          // sumC łączna (do KART ZAWODNIKÓW, niezależnie od filtra rankingów powyżej)
+          const sumAll = (player, ...ids) => (player.matches||[]).reduce((t,m) => t + ids.reduce((s,id) => s + parseInt((m.criteria||{})[id]||0), 0), 0);
+
           return (
             <div style={{ marginTop:20 }}>
               <div style={LABEL}>STATYSTYKI (bez zawodników spoza klasy)</div>
+
+              {/* Przełącznik: ranking sezonowy vs łączny */}
+              <div style={{ display:"flex", gap:6, flexWrap:"wrap", marginBottom:14, background:"#070a08", borderRadius:10, padding:5 }}>
+                <button onClick={() => setStatsSeasonFilter(null)}
+                  style={{ padding:"7px 12px", border:"none", borderRadius:7, background:filterIdx===null?"#0f1612":"transparent", color:filterIdx===null?"#00ff85":"#4a6b56", fontSize:12, fontWeight:700, cursor:"pointer" }}>
+                  🏆 Łącznie
+                </button>
+                {[...seasons].reverse().map(s => (
+                  <button key={s.index} onClick={() => setStatsSeasonFilter(s.index)}
+                    style={{ padding:"7px 12px", border:"none", borderRadius:7, background:filterIdx===s.index?"#0f1612":"transparent", color:filterIdx===s.index?"#00ff85":"#4a6b56", fontSize:12, fontWeight:700, cursor:"pointer" }}>
+                    {seasonNames?.[s.index] || `Sezon ${s.index}`}{s.index===curIdx?" •":""}
+                  </button>
+                ))}
+              </div>
+              <div style={{ fontSize:10, color:"#4a6b56", marginBottom:14, marginTop:-6 }}>
+                {filterIdx===null ? "Pokazuje sumę ze wszystkich sezonów" : `Pokazuje tylko mecze z: ${seasonNames?.[filterIdx] || `Sezon ${filterIdx}`}`}
+              </div>
+
               {boards.map(b => (
                 <div key={b.title} style={CARD}>
                   <div style={{ fontSize:14, fontWeight:700, marginBottom:12, color:"#e2e8f0" }}>{b.emoji} {b.title}</div>
-                  {b.data.length===0 ? <div style={{ fontSize:12, color:"#334155", fontStyle:"italic" }}>Brak danych</div>
+                  {b.data.length===0 ? <div style={{ fontSize:12, color:"#334155", fontStyle:"italic" }}>Brak danych w tym widoku</div>
                     : b.data.map((row,i) => {
                       const pct = b.data[0].n>0 ? (row.n/b.data[0].n)*100 : 0;
                       return (
@@ -1441,10 +1493,11 @@ function MainApp({ readOnly, onExit, identityId, onChangeIdentity }) {
                     })}
                 </div>
               ))}
-              <div style={{ fontSize:11, color:"#334155", marginBottom:10, letterSpacing:.5 }}>KARTY ZAWODNIKÓW</div>
-              {real.filter(p => p.matches.length>0).sort((a,b) => sumC(b,"goal","screamer","freekick","header")-sumC(a,"goal","screamer","freekick","header")).map(p => {
+
+              <div style={{ fontSize:11, color:"#334155", marginBottom:10, marginTop:6, letterSpacing:.5 }}>KARTY ZAWODNIKÓW · ŁĄCZNIE (cała historia)</div>
+              {real.filter(p => p.matches.length>0).sort((a,b) => sumAll(b,"goal","screamer","freekick","header")-sumAll(a,"goal","screamer","freekick","header")).map(p => {
                 const avg = getAvgRating(p.matches);
-                const stats = [["⚽",sumC(p,"goal","header","freekick","screamer"),"Gole","#00ff85"],["🎯",sumC(p,"assist"),"Asysty","#14b8a6"],["🚀",sumC(p,"screamer"),"Bengery","#f97316"],["🍑",sumC(p,"nutmeg"),"Siatk.","#a855f7"],["🔥",sumC(p,"clutch"),"Clutch","#fbbf24"],["🤦",sumC(p,"miss","penalty_miss"),"Pudła","#ef4444"],["😬",sumC(p,"own_goal"),"Samob.","#b91c1c"],["💀",sumC(p,"lost_ball_danger"),"Straty","#ef4444"]];
+                const stats = [["⚽",sumAll(p,"goal","header","freekick","screamer"),"Gole","#00ff85"],["🎯",sumAll(p,"assist"),"Asysty","#14b8a6"],["🚀",sumAll(p,"screamer"),"Bengery","#f97316"],["🍑",sumAll(p,"nutmeg"),"Siatk.","#a855f7"],["🔥",sumAll(p,"clutch"),"Clutch","#fbbf24"],["🤦",sumAll(p,"miss","penalty_miss"),"Pudła","#ef4444"],["😬",sumAll(p,"own_goal"),"Samob.","#b91c1c"],["💀",sumAll(p,"lost_ball_danger"),"Straty","#ef4444"]];
                 return (
                   <div key={p.id} style={{ background:"#0f1612", border:"1px solid #1c2820", borderRadius:10, padding:"13px 14px", marginBottom:8 }}>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
@@ -1653,6 +1706,7 @@ function MainApp({ readOnly, onExit, identityId, onChangeIdentity }) {
                   </div>
                 </div>
               </div>
+              {!readOnly && <VacationPanel player={p} players={players} onToggle={toggleVacation} />}
               {p.matches.length>0 && (
                 <div style={CARD}>
                   <div style={{ fontSize:11, fontWeight:700, color:"#334155", marginBottom:10, letterSpacing:.5 }}>📈 WYKRES WYCENY</div>
@@ -2392,6 +2446,51 @@ function RadarChart({ axes, size = 220 }) {
         );
       })}
     </svg>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  PANEL URLOPU — wybór sezonów, w których zawodnik nie gra
+// ═══════════════════════════════════════════════════════════════════════════
+function VacationPanel({ player, players, onToggle }) {
+  const [open, setOpen] = useState(false);
+  const seasons = buildSeasons(players);
+  const curIdx = seasonIndexOf(todayStr());
+  const onVac = (player.vacationSeasons || []).includes(curIdx);
+
+  return (
+    <div style={{ ...CARD, borderColor: onVac ? "#b45309" : "#1c2820" }}>
+      <div onClick={() => setOpen(o => !o)} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", cursor:"pointer" }}>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <span style={{ fontSize:16 }}>🏖️</span>
+          <div>
+            <div style={{ fontSize:13, fontWeight:800, color:"#e7f5ec" }}>Urlop</div>
+            <div style={{ fontSize:10, color:"#4a6b56" }}>
+              {onVac ? "Ten zawodnik jest na urlopie w bieżącym sezonie" : "Zawodnik gra w bieżącym sezonie"}
+            </div>
+          </div>
+        </div>
+        <span style={{ fontSize:11, color:"#4a6b56" }}>{open?"▲":"▼"}</span>
+      </div>
+      {open && (
+        <div style={{ marginTop:12, display:"flex", flexDirection:"column", gap:6 }}>
+          <div style={{ fontSize:10, color:"#4a6b56", marginBottom:2 }}>
+            Wybierz sezony, w których ten zawodnik nie będzie grał. Nie pojawi się wtedy w wyborze składu meczu, a po sezonie straci tylko -10% wartości (zamiast ÷2).
+          </div>
+          {seasons.map(s => {
+            const isOn = (player.vacationSeasons || []).includes(s.index);
+            const isCur = s.index === curIdx;
+            return (
+              <button key={s.index} onClick={() => onToggle(player.id, s.index)}
+                style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"9px 12px", borderRadius:8, border:`1px solid ${isOn?"#b45309":"#1c2820"}`, background:isOn?"rgba(180,83,9,.15)":"#070a08", color:isOn?"#fbbf24":"#a8c9b0", fontSize:12, fontWeight:700, cursor:"pointer" }}>
+                <span>Sezon {s.index}{isCur?" (bieżący)":""}{s.completed?" — zakończony":""}</span>
+                <span>{isOn?"🏖️ Na urlopie":"Aktywny"}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
